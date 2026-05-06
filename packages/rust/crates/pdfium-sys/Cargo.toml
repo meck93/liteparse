@@ -6,3 +6,6 @@ links = "pdfium"
 
 [build-dependencies]
 bindgen = "0.71"
+flate2 = "1"
+tar = "0.4"
+ureq = "3"

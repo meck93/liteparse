@@ -1,32 +1,164 @@
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const PDFIUM_RELEASE_TAG: &str = "chromium/7827";
+const PDFIUM_RELEASE_URL: &str =
+    "https://github.com/run-llama/pdfium-binaries/releases/download";
 
 fn main() {
-    let lib_path = if let Ok(p) = env::var("PDFIUM_LIB_PATH") {
-        PathBuf::from(p)
-    } else {
-        let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        manifest.join("../../vendor/pdfium/release/lib")
-    };
+    let (lib_dir, include_dir) = resolve_pdfium_dirs();
 
-    let include_path = if let Ok(p) = env::var("PDFIUM_INCLUDE_PATH") {
-        PathBuf::from(p)
-    } else {
-        let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        manifest.join("../../vendor/pdfium/release/include")
-    };
+    let lib_dir = lib_dir.canonicalize().unwrap_or_else(|e| {
+        panic!("pdfium lib dir does not exist at {}: {e}", lib_dir.display())
+    });
+    let include_dir = include_dir.canonicalize().unwrap_or_else(|e| {
+        panic!("pdfium include dir does not exist at {}: {e}", include_dir.display())
+    });
 
-    let lib_path = lib_path.canonicalize().expect("pdfium lib path does not exist");
-    println!("cargo:rustc-link-search=native={}", lib_path.display());
+    println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=dylib=pdfium");
+    println!("cargo:lib_path={}", lib_dir.display());
 
-    // Export the lib path so downstream crates can find it
-    println!("cargo:lib_path={}", lib_path.display());
+    run_bindgen(&include_dir);
+}
 
-    // Run bindgen
+/// Determine where pdfium lib and include dirs are.
+/// Priority: env vars > vendor/ dir > auto-download to cache.
+fn resolve_pdfium_dirs() -> (PathBuf, PathBuf) {
+    // 1. Explicit env var override
+    if let (Ok(lib), Ok(inc)) = (env::var("PDFIUM_LIB_PATH"), env::var("PDFIUM_INCLUDE_PATH")) {
+        return (PathBuf::from(lib), PathBuf::from(inc));
+    }
+
+    // 2. Vendor directory relative to workspace root
+    let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let vendor_lib = manifest.join("../../vendor/pdfium/release/lib");
+    let vendor_include = manifest.join("../../vendor/pdfium/release/include");
+    if vendor_lib.exists() && vendor_include.exists() {
+        return (vendor_lib, vendor_include);
+    }
+
+    // 3. Auto-download to cache
+    let cache_dir = pdfium_cache_dir();
+    let lib_dir = cache_dir.join("lib");
+    let include_dir = cache_dir.join("include");
+
+    if lib_dir.exists() && include_dir.exists() {
+        return (lib_dir, include_dir);
+    }
+
+    eprintln!("pdfium-sys: downloading pdfium from GitHub releases...");
+    download_pdfium(&cache_dir);
+
+    (lib_dir, include_dir)
+}
+
+/// ~/.cache/pdfium-rs/<tag>/<asset_stem>/
+fn pdfium_cache_dir() -> PathBuf {
+    let base = dirs_cache().join("pdfium-rs");
+    let tag_safe = PDFIUM_RELEASE_TAG.replace('/', "_");
+    let asset = pdfium_asset_stem();
+    base.join(tag_safe).join(asset)
+}
+
+/// Platform cache dir: $XDG_CACHE_HOME, ~/Library/Caches, or ~/.cache
+fn dirs_cache() -> PathBuf {
+    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg);
+    }
+    let home = env::var("HOME").expect("HOME env var not set");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "macos" {
+        PathBuf::from(&home).join("Library/Caches")
+    } else {
+        PathBuf::from(&home).join(".cache")
+    }
+}
+
+/// Map target triple to the pdfium-binaries asset name (without .tgz).
+fn pdfium_asset_stem() -> &'static str {
+    let target = env::var("TARGET").unwrap();
+    match target.as_str() {
+        "aarch64-apple-darwin" => "pdfium-mac-arm64",
+        "x86_64-apple-darwin" => "pdfium-mac-x64",
+        // Universal macOS binary works for both, but we prefer arch-specific
+        "x86_64-unknown-linux-gnu" | "x86_64-unknown-linux-musl" => "pdfium-linux-x64",
+        "aarch64-unknown-linux-gnu" | "aarch64-unknown-linux-musl" => "pdfium-linux-arm64",
+        "armv7-unknown-linux-gnueabihf" => "pdfium-linux-arm",
+        "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "pdfium-win-x64",
+        "aarch64-pc-windows-msvc" => "pdfium-win-arm64",
+        "i686-pc-windows-msvc" | "i686-pc-windows-gnu" => "pdfium-win-x86",
+        "wasm32-unknown-unknown" | "wasm32-wasip1" => "pdfium-wasm",
+        other => panic!("unsupported target for pdfium auto-download: {other}"),
+    }
+}
+
+fn download_pdfium(dest: &Path) {
+    let asset = format!("{}.tgz", pdfium_asset_stem());
+    let tag_encoded = PDFIUM_RELEASE_TAG.replace('/', "%2F");
+    let url = format!("{PDFIUM_RELEASE_URL}/{tag_encoded}/{asset}");
+
+    eprintln!("pdfium-sys: GET {url}");
+
+    let response = ureq::get(&url).call().unwrap_or_else(|e| {
+        panic!("failed to download pdfium from {url}: {e}");
+    });
+
+    let reader = response.into_body().into_reader();
+    let gz = flate2::read::GzDecoder::new(reader);
+    let mut archive = tar::Archive::new(gz);
+
+    // Extract to a temp dir first, then rename atomically
+    let tmp = dest.with_extension("tmp");
+    if tmp.exists() {
+        fs::remove_dir_all(&tmp).ok();
+    }
+    fs::create_dir_all(&tmp).expect("failed to create temp dir");
+    archive.unpack(&tmp).expect("failed to extract pdfium archive");
+
+    // Fix dylib install name on macOS so @rpath resolution works
+    fix_dylib_install_name(&tmp);
+
+    // Atomic rename into place
+    if dest.exists() {
+        fs::remove_dir_all(dest).ok();
+    }
+    fs::rename(&tmp, dest).expect("failed to move pdfium to cache dir");
+
+    eprintln!("pdfium-sys: cached pdfium at {}", dest.display());
+}
+
+/// On macOS, pdfium-binaries ships dylibs with install name `./libpdfium.dylib`.
+/// We need `@rpath/libpdfium.dylib` for rpath resolution to work.
+fn fix_dylib_install_name(dir: &Path) {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os != "macos" {
+        return;
+    }
+
+    let dylib = dir.join("lib/libpdfium.dylib");
+    if !dylib.exists() {
+        return;
+    }
+
+    let status = Command::new("install_name_tool")
+        .args(["-id", "@rpath/libpdfium.dylib"])
+        .arg(&dylib)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("pdfium-sys: install_name_tool exited with {s}"),
+        Err(e) => eprintln!("pdfium-sys: failed to run install_name_tool: {e}"),
+    }
+}
+
+fn run_bindgen(include_dir: &Path) {
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
-        .clang_arg(format!("-I{}", include_path.display()))
+        .clang_arg(format!("-I{}", include_dir.display()))
         .allowlist_function("FPDF.*")
         .allowlist_function("FPDFText_.*")
         .allowlist_function("FPDFPage.*")

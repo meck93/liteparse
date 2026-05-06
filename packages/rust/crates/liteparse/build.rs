@@ -1,16 +1,9 @@
 use std::env;
-use std::path::PathBuf;
 
 fn main() {
-    // Resolve pdfium dylib path the same way pdfium-sys does
-    let lib_path = if let Ok(p) = env::var("PDFIUM_LIB_PATH") {
-        PathBuf::from(p)
-    } else {
-        let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
-        manifest.join("../../vendor/pdfium/release/lib")
-    };
-
-    if let Ok(lib_path) = lib_path.canonicalize() {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_path.display());
+    // DEP_PDFIUM_LIB_PATH is exported by pdfium-sys's build.rs via `cargo:lib_path=...`
+    // Available because liteparse directly depends on pdfium-sys (links = "pdfium").
+    if let Ok(lib_path) = env::var("DEP_PDFIUM_LIB_PATH") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{lib_path}");
     }
 }
