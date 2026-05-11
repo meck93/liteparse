@@ -115,7 +115,7 @@ fn default_tessdata_dir() -> String {
     }
     #[cfg(target_os = "linux")]
     {
-        if let Some(home) = std::env::var("HOME").ok() {
+        if let Ok(home) = std::env::var("HOME") {
             return format!("{}/.tesseract-rs/tessdata", home);
         }
     }
