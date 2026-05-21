@@ -233,7 +233,7 @@ jobs:
           path: dist
 
       - name: Install wheel
-        run: pip install --find-links dist liteparse
+        run: pip install --no-index --find-links dist liteparse
 
       - name: Smoke test
         run: |
@@ -380,6 +380,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          password: ${{ secrets.PYPI_TOKEN }}
 
       - name: Create git tag
         if: ${{ !inputs.dry-run }}
