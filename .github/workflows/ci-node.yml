@@ -2,13 +2,13 @@ name: CI - Node Bindings
 
 on:
   push:
-    branches: [main, logan/musl-builds] # temporary, will remove once this is merged
+    branches: [main]
     paths:
       - "crates/**"
       - "packages/node/**"
       - ".github/workflows/ci-node.yml"
   pull_request:
-    branches: [main]
+    branches: [main, logan/musl-builds] # temporary, will remove once this is merged
     paths:
       - "crates/**"
       - "packages/node/**"
