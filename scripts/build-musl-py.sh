@@ -51,7 +51,7 @@ rm -rf dist
 # Order: trigger the pdfium download via a cargo metadata-only compile of
 # pdfium-sys (cheap), then copy, then real maturin build.
 ( cd ../../crates/pdfium-sys && cargo build --release --target x86_64-unknown-linux-musl )
-bash scripts/copy-pdfium.sh
+sh scripts/copy-pdfium.sh
 
 # --find-interpreter would try to build for every python on PATH; we only
 # have the container's python (3.12 for python:3.12-alpine, etc.). Letting
