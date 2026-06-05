@@ -219,6 +219,25 @@ pub(super) fn line_uniform_style(line: &ProjectedLine) -> Option<SpanStyle> {
     Some(first)
 }
 
+/// True when every non-whitespace span on the line is bold and non-mono.
+/// Unlike `line_uniform_style`, this tolerates per-span *italic* variation,
+/// so a heading whose spans mix bold and bold-italic (e.g.
+/// "**4** ***Foo*** **Bar**") still reads as a single bold line. Returns
+/// false for an empty / all-whitespace line.
+pub(super) fn line_all_bold(line: &ProjectedLine) -> bool {
+    let mut saw_span = false;
+    for span in &line.spans {
+        if span.text.trim().is_empty() {
+            continue;
+        }
+        if is_mono_item(span) || !is_bold_item(span) {
+            return false;
+        }
+        saw_span = true;
+    }
+    saw_span
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_helpers::styled_line;

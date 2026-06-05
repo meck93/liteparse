@@ -1,6 +1,6 @@
 use crate::types::{Anchor, ProjectedLine};
 
-use super::inline::{SpanStyle, line_uniform_style, render_line_inline};
+use super::inline::{SpanStyle, line_all_bold, line_uniform_style, render_line_inline};
 
 /// Multiplier on line height used as the paragraph-break threshold.
 pub(super) const PARAGRAPH_GAP_MULTIPLIER: f32 = 1.5;
@@ -85,6 +85,13 @@ pub(super) fn continues_paragraph(prev: &ProjectedLine, cur: &ProjectedLine) -> 
     if let (Some(p), Some(c)) = (line_uniform_style(prev), line_uniform_style(cur))
         && p.bold != c.bold
     {
+        return false;
+    }
+    // Same intent, but italic-tolerant: an all-bold line (which may mix bold
+    // and bold-italic spans, so `line_uniform_style` yields None) adjacent to
+    // a non-all-bold line is a paragraph break. Catches a bold section heading
+    // hugging the body paragraph below it.
+    if line_all_bold(prev) != line_all_bold(cur) {
         return false;
     }
     if prev.region_path != cur.region_path {

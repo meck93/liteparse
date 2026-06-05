@@ -1,7 +1,7 @@
 use crate::types::{OutlineTarget, ParsedPage, ProjectedLine, StructNode};
 
 use super::classify::is_rotated_line;
-use super::inline::line_uniform_style;
+use super::inline::line_all_bold;
 use super::paragraphs::continues_paragraph;
 use super::tables::{TABLE_MIN_COLUMNS, split_cells};
 
@@ -267,11 +267,24 @@ pub(super) fn looks_like_bold_heading(
     if is_caption_line(text) {
         return false;
     }
-    let style = match line_uniform_style(line) {
-        Some(s) => s,
-        None => return false,
-    };
-    if !style.bold || style.mono {
+    // Accept a line whose spans are all bold (italic may vary) and non-mono.
+    // A strict single-style check would reject headings that mix bold and
+    // bold-italic spans (e.g. "**4** ***Foo*** **Bar**"), which are common
+    // for numbered section headings.
+    if !line_all_bold(line) {
+        return false;
+    }
+    // Run-in labels — a bold lead-in that ends in a period and flows straight
+    // into the body sentence ("United Kingdom.", "Model merging.") — read as
+    // emphasis, not block headings. A trailing '.' is the giveaway; real
+    // section headings (numbered or titled) don't terminate in a period.
+    // ':' is deliberately allowed ("Reference frameworks:").
+    if text.ends_with('.') {
+        return false;
+    }
+    // Block headings are capitalized. A bold line starting lowercase is almost
+    // always a stray bold word or a borderless table cell, not a heading.
+    if text.chars().next().is_some_and(|c| c.is_lowercase()) {
         return false;
     }
     // Reject bold-uniform lines dominated by digits / punctuation — these are
