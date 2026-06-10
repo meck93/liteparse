@@ -13,8 +13,8 @@ use crate::types::{OutlineTarget, ParsedPage};
 /// cover headings, paragraphs (with de-hyphenation and inline emphasis), lists,
 /// code blocks, ruled and borderless tables, horizontal rules, and figures.
 ///
-/// Pages are emitted in order, separated by `\n\n-----\n\n` with a
-/// `<!-- page N -->` marker. Pages that contain no projected lines (e.g. blank
+/// Pages are emitted in order, separated by `\n\n-----\n\n`.
+/// Pages that contain no projected lines (e.g. blank
 /// or fully-OCR pages without font-size info) fall back to the projected text
 /// wrapped in a fenced block so we never silently drop content.
 pub fn format_markdown(
@@ -35,8 +35,6 @@ pub fn format_markdown(
         if i > 0 {
             out.push_str("\n\n-----\n\n");
         }
-        out.push_str(&format!("<!-- page {} -->\n\n", page.page_number));
-
         if page.projected_lines.is_empty() {
             // No structural metadata for this page — fall back to the
             // projection text inside a fence so nothing is dropped.
@@ -58,7 +56,7 @@ pub fn format_markdown(
             .cloned()
             .collect();
         let chrome_indices = detect_single_page_chrome(page, body_size);
-        let blocks = classify_page_with_filters(
+        let mut blocks = classify_page_with_filters(
             page,
             &heading_map,
             &header_footer,
@@ -66,6 +64,19 @@ pub fn format_markdown(
             image_mode,
             &chrome_indices,
         );
+        // A page whose only surviving blocks are horizontal rules (all its
+        // text was stripped as chrome) should render empty, not as a stack
+        // of bare `---` separators.
+        let has_content = blocks.iter().any(|b| {
+            !matches!(
+                b,
+                crate::markdown_layout::Block::HorizontalRule
+                    | crate::markdown_layout::Block::Figure { .. }
+            )
+        });
+        if !has_content {
+            blocks.retain(|b| !matches!(b, crate::markdown_layout::Block::HorizontalRule));
+        }
         out.push_str(&render_blocks(&blocks));
     }
     out
@@ -139,7 +150,6 @@ mod tests {
         let out = format_markdown(&[p], &[], ImageMode::Placeholder);
         assert!(out.contains("```text"));
         assert!(out.contains("hello"));
-        assert!(out.contains("<!-- page 1 -->"));
     }
 
     #[test]

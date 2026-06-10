@@ -2627,6 +2627,13 @@ fn build_ruled_table(
     let mut row_alpha_spanner: Vec<bool> = vec![false; n_rows];
     let mut consumed_indices: Vec<usize> = Vec::new();
     const GRID_X_SLACK_PT: f32 = 6.0;
+    // Straddle census: spans that cross an interior column boundary by a
+    // clear margin on both sides. A real ruled table keeps text inside cells
+    // (the occasional PDFium merged run aside); decorative slide/layout boxes
+    // over flowing prose slice through most runs (doc 198, a TOC slide).
+    const STRADDLE_MARGIN_PT: f32 = 3.0;
+    let mut span_total = 0usize;
+    let mut span_straddle = 0usize;
 
     let mut push_cell = |cells: &mut Vec<Vec<String>>,
                          cell_has_text: &mut Vec<Vec<bool>>,
@@ -2718,6 +2725,14 @@ fn build_ruled_table(
             let sx1 = (span.x + span.width).clamp(xs[0], xs[n_cols]);
             let c_lo = find_bucket(&xs, sx0).unwrap_or(0);
             let c_hi = find_bucket(&xs, sx1).unwrap_or(n_cols - 1);
+            span_total += 1;
+            {
+                let m0 = (span.x + STRADDLE_MARGIN_PT).clamp(xs[0], xs[n_cols]);
+                let m1 = (span.x + span.width - STRADDLE_MARGIN_PT).clamp(xs[0], xs[n_cols]);
+                if m1 > m0 && find_bucket(&xs, m0) != find_bucket(&xs, m1) {
+                    span_straddle += 1;
+                }
+            }
             if c_lo == c_hi {
                 push_cell(&mut cells, &mut cell_has_text, row, c_lo, &span.text);
                 push_repl(&mut cells_repl, row, c_lo, &span.text);
@@ -2764,6 +2779,24 @@ fn build_ruled_table(
     if consumed_indices.is_empty() {
         if dbg {
             eprintln!("[ruled]   REJECT no-lines-consumed");
+        }
+        return None;
+    }
+
+    let straddle_frac = if span_total > 0 {
+        span_straddle as f32 / span_total as f32
+    } else {
+        0.0
+    };
+    if dbg {
+        eprintln!("[ruled]   straddle {span_straddle}/{span_total} = {straddle_frac:.2}");
+    }
+    if span_total >= 6
+        && straddle_frac > 0.45
+        && std::env::var("LITEPARSE_DISABLE_STRADDLE_GUARD").is_err()
+    {
+        if dbg {
+            eprintln!("[ruled]   REJECT straddle-frac {straddle_frac:.2}");
         }
         return None;
     }

@@ -660,6 +660,28 @@ fn extract_page_text_items(
 
     seg.flush(&mut items);
 
+    // Drop items entirely outside the page view box. Print-spread / imposed
+    // PDFs carry the neighbouring page's text at x beyond the page edge in
+    // the same content stream; viewers never show it. Partially-visible
+    // items are kept.
+    let vb_w = (view_box.right - view_box.left).abs();
+    let vb_h = (view_box.top - view_box.bottom).abs();
+    let pre_clip_count = items.len();
+    if std::env::var("LITEPARSE_DISABLE_OFFPAGE_CLIP").is_err() {
+        items.retain(|it| {
+            it.x < vb_w
+                && it.x + it.width.max(0.1) > 0.0
+                && it.y < vb_h
+                && it.y + it.height.max(0.1) > 0.0
+        });
+    }
+    if debug && items.len() < pre_clip_count {
+        eprintln!(
+            "[extract-debug] off-page clip removed {} items",
+            pre_clip_count - items.len()
+        );
+    }
+
     if debug {
         eprintln!("[extract-debug] items before dedup: {}", items.len());
     }

@@ -490,7 +490,16 @@ fn classify_region(
                 .as_ref()
                 .map(|p| &p.last)
                 .or(last_list_line.map(|i| &lines[i]));
-            !(starts_lower && prev.is_some_and(|p| continues_paragraph(p, line)))
+            // A previous line ending in a mid-word hyphen wrap means this
+            // line is its continuation regardless of capitalization
+            // ("…SOLAR 10.7 Billion-" / "Parameter Model: We have…").
+            let prev_hyphen_wrap = std::env::var("LITEPARSE_DISABLE_HEADING_GUARDS").is_err()
+                && prev.is_some_and(|p| {
+                    let t = p.text.trim_end();
+                    t.ends_with('-') && t.chars().rev().nth(1).is_some_and(|c| c.is_alphanumeric())
+                });
+            !((starts_lower || prev_hyphen_wrap)
+                && prev.is_some_and(|p| continues_paragraph(p, line)))
         });
         // Long-text guard: a real heading is a label, not a sentence with
         // multiple clauses. Footnotes / citations / captions that happen to
@@ -512,7 +521,7 @@ fn classify_region(
         // heading. Both signals must fire — a heading occasionally has either
         // on its own (e.g. abbreviation periods, intentional hyphen).
         let size_level = size_level.filter(|_| {
-            let has_mid_sentence = text.contains(". ");
+            let has_mid_sentence = text.contains(". ") || text.contains(": ");
             let mid_word_wrap = text.trim_end().ends_with('-');
             !(has_mid_sentence && mid_word_wrap)
         });

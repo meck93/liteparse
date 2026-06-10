@@ -383,7 +383,12 @@ pub(super) fn looks_like_bold_heading(
     //   - ≥3 space-separated words after the break
     //   - line ends with mid-word "-" (wrap continuation) OR is >50 chars
     //   - first char after the break is uppercase ASCII letter
-    if let Some(pos) = text.find(". ") {
+    let colon_ok = std::env::var("LITEPARSE_DISABLE_HEADING_GUARDS").is_err();
+    let run_in_break = text
+        .find(". ")
+        .map(|p| (p, 2))
+        .or_else(|| text.find(": ").map(|p| (p, 2)).filter(|_| colon_ok));
+    if let Some((pos, sep_len)) = run_in_break {
         let before = &text[..pos];
         // Section-number prefix exemption: when the segment before ". " is a
         // numbered section identifier (e.g. "1", "1.5", "A.2", "Sec. 2",
@@ -391,7 +396,7 @@ pub(super) fn looks_like_bold_heading(
         // "1.5. Migrant Workers..." — the period is part of the section
         // number, not a sentence terminator. Skip the run-in rejection.
         let is_section_number = is_section_number_prefix(before);
-        let after = text[pos + 2..].trim();
+        let after = text[pos + sep_len..].trim();
         let starts_upper = after.chars().next().is_some_and(|c| c.is_ascii_uppercase());
         let word_count = after.split_whitespace().count();
         let ends_hyphen = text.trim_end().ends_with('-');
