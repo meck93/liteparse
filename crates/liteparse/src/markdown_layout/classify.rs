@@ -145,6 +145,33 @@ pub fn classify_page_with_filters(
         &filtered_owned
     };
 
+    // Cross-region table re-merge: when a V-cut sliced a table into sibling
+    // leaves, fuse the slices back into single rows (one synthetic region)
+    // before grouping. Each successful merge carries its own validated table
+    // runs, which are handed to `classify_region` so emission is guaranteed
+    // even for shapes the standard detectors would reject in normal flow.
+    // TOC pages are skipped: their split number/title/page-number leaves
+    // baseline-align perfectly and fuse into a convincing-but-wrong table.
+    let mut cross_merged_owned: Option<Vec<ProjectedLine>> = None;
+    let mut cross_region_runs: Vec<(Vec<u16>, Vec<super::tables::TableRun>)> = Vec::new();
+    for _ in 0..3 {
+        if toc_page {
+            break;
+        }
+        let cur: &[ProjectedLine] = cross_merged_owned.as_deref().unwrap_or(lines);
+        let Some(m) = super::cross_region::find_cross_region_table_merge(cur) else {
+            break;
+        };
+        let mut next: Vec<ProjectedLine> = Vec::with_capacity(cur.len());
+        next.extend_from_slice(&cur[..m.start]);
+        let merged_path = m.merged[0].region_path.clone();
+        next.extend(m.merged);
+        next.extend_from_slice(&cur[m.end..]);
+        cross_region_runs.push((merged_path, m.runs));
+        cross_merged_owned = Some(next);
+    }
+    let lines: &[ProjectedLine] = cross_merged_owned.as_deref().unwrap_or(lines);
+
     // Region-grouped pipeline: split the filtered line list into contiguous
     // runs sharing a `region_path` (one xy_cut leaf each) and classify each
     // leaf as its own mini-page. Paragraph / list / code / heading state is
@@ -239,6 +266,10 @@ pub fn classify_page_with_filters(
         }
 
         let region_start = blocks.len();
+        let precomputed_tables = cross_region_runs
+            .iter()
+            .find(|(path, _)| *path == lines[rstart].region_path)
+            .map(|(_, runs)| runs.clone());
         let region_blocks = classify_region(
             region_lines,
             region_interruptions,
@@ -248,6 +279,7 @@ pub fn classify_page_with_filters(
             image_mode,
             toc_page,
             debug,
+            precomputed_tables,
         );
         if !region_blocks.is_empty() {
             region_boundaries.push(region_start);
@@ -271,6 +303,7 @@ pub fn classify_page_with_filters(
 /// `stitch_regions` post-pass. Page-level signals (`heading_map`,
 /// `struct_nodes`, `outline`, header/footer y-bands) are still consulted
 /// because they're computed once per document.
+#[allow(clippy::too_many_arguments)]
 fn classify_region(
     lines: &[ProjectedLine],
     interruptions: Vec<(f32, Interruption)>,
@@ -280,6 +313,7 @@ fn classify_region(
     image_mode: crate::config::ImageMode,
     toc_page: bool,
     debug: bool,
+    precomputed_tables: Option<Vec<super::tables::TableRun>>,
 ) -> Vec<Block> {
     let _ = image_mode; // interruption emission already gated upstream
     let mut blocks: Vec<Block> = Vec::new();
@@ -315,7 +349,7 @@ fn classify_region(
     // objects are page-coordinate; the detector intersects them against the
     // sub-list's line bboxes anyway.
     let ruled_runs = detect_ruled_tables(lines, &page.graphics, page.page_width, page.page_height);
-    let borderless_runs = detect_tables(lines);
+    let borderless_runs = precomputed_tables.unwrap_or_else(|| detect_tables(lines));
     let table_runs = merge_table_runs(ruled_runs, borderless_runs);
 
     const TABLE_HR_SUPPRESS_HEADROOM_ROWS: f32 = 4.0;

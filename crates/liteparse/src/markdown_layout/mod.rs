@@ -8,6 +8,7 @@
 
 mod blocks;
 mod classify;
+mod cross_region;
 mod headings;
 mod hr;
 mod inline;
