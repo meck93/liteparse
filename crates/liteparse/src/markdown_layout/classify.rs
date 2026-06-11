@@ -26,6 +26,10 @@ use super::tables::{detect_ruled_tables, detect_tables, merge_table_runs};
 enum Interruption {
     Hr,
     Figure(crate::types::ImageRef),
+    /// A ruled table detected by the global pass, already fully built. Emitted
+    /// at its top-y position like other interruptions; its lines were pulled
+    /// out of the region pipeline so it won't be re-detected per-region.
+    Table(super::blocks::Block),
 }
 
 /// Returns true if any span on the line is rotated more than ~5° off
@@ -145,6 +149,99 @@ pub fn classify_page_with_filters(
         &filtered_owned
     };
 
+    // Global ruled-table pass. `detect_ruled_tables` is otherwise called per
+    // xy_cut leaf, but a ruled table whose rows scatter across several leaves
+    // never has its full text in any single leaf and gets rejected as
+    // mostly-empty. Run it once over all lines, pull the consumed lines out of
+    // the region pipeline, and emit each table as a y-positioned interruption.
+    // Runs before cross-region merge so that pass (and the region indices its
+    // runs carry) operate on the already-filtered line list. Disable with
+    // LITEPARSE_DISABLE_GLOBAL_RULED=1.
+    let mut global_ruled_tables: Vec<(f32, Block)> = Vec::new();
+    let mut global_ruled_consumed: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    if std::env::var("LITEPARSE_DISABLE_GLOBAL_RULED").is_err() {
+        for (run, consumed) in super::tables::detect_ruled_tables_global(
+            lines,
+            &page.graphics,
+            page.page_width,
+            page.page_height,
+        ) {
+            // Only rescue tables the per-region path can't see whole: those
+            // whose rows scatter across ≥2 xy_cut leaves. A table living in a
+            // single region is already handled (often better) by per-region
+            // detection — replacing it here only risks regressions.
+            let mut groups: std::collections::HashMap<&Vec<u16>, Vec<usize>> =
+                std::collections::HashMap::new();
+            for &i in &consumed {
+                groups.entry(&lines[i].region_path).or_default().push(i);
+            }
+            if groups.len() < 2 {
+                continue;
+            }
+            // If any single leaf's share of these lines already forms a table
+            // on its own, the per-region path handles this content — don't
+            // override (e.g. doc 127: a decorative frame spans the data table
+            // plus surrounding prose; the data region tables cleanly by
+            // itself, the frame would fuse prose into garbage cells).
+            let already_handled = groups.values().any(|idxs| {
+                if idxs.len() < 2 {
+                    return false;
+                }
+                let sub: Vec<ProjectedLine> = idxs.iter().map(|&i| lines[i].clone()).collect();
+                !super::tables::detect_ruled_tables(
+                    &sub,
+                    &page.graphics,
+                    page.page_width,
+                    page.page_height,
+                )
+                .is_empty()
+                    || !super::tables::detect_tables(&sub).is_empty()
+            });
+            if already_handled {
+                continue;
+            }
+            // Single-column gate. A decorative banner/frame around a prose
+            // column (just a left+right border, no interior verticals) unions
+            // into a 1-column "grid" whose lone cell is the whole paragraph
+            // block. A real data table always has ≥2 columns; a 1-col ruled
+            // region is a framed text box, never tabular. (Catches docs 028649
+            // and 06ba2a90 — both emitted a 1-col table of paragraph blobs.
+            // Word-count gating can't be used here: the genuine scattered
+            // tables this pass rescues on opendataloader — competence/legal
+            // description grids — have equally long cells.)
+            if let Block::Table { header, rows } = &run.block {
+                let cols = header
+                    .as_ref()
+                    .map(|h| h.len())
+                    .or_else(|| rows.first().map(Vec::len))
+                    .unwrap_or(0);
+                if cols < 2 {
+                    continue;
+                }
+            }
+            let top_y = consumed
+                .iter()
+                .map(|&i| lines[i].bbox.y)
+                .fold(f32::INFINITY, f32::min);
+            global_ruled_tables.push((top_y, run.block));
+            global_ruled_consumed.extend(consumed);
+        }
+    }
+    let global_ruled_owned: Option<Vec<ProjectedLine>> = if global_ruled_consumed.is_empty() {
+        None
+    } else {
+        Some(
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !global_ruled_consumed.contains(i))
+                .map(|(_, l)| l.clone())
+                .collect(),
+        )
+    };
+    let lines: &[ProjectedLine] = global_ruled_owned.as_deref().unwrap_or(lines);
+
     // Cross-region table re-merge: when a V-cut sliced a table into sibling
     // leaves, fuse the slices back into single rows (one synthetic region)
     // before grouping. Each successful merge carries its own validated table
@@ -210,6 +307,9 @@ pub fn classify_page_with_filters(
             all_interruptions.push((r.bbox.y, Interruption::Figure(r.clone())));
         }
     }
+    for (y, block) in global_ruled_tables {
+        all_interruptions.push((y, Interruption::Table(block)));
+    }
     all_interruptions.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     // region_boundary_idx[k] = index into `blocks` where region k's first
@@ -228,6 +328,7 @@ pub fn classify_page_with_filters(
                 id: r.id,
                 bbox: r.bbox,
             },
+            Interruption::Table(b) => b,
         });
     };
 
@@ -405,6 +506,7 @@ fn classify_region(
                     id: r.id,
                     bbox: r.bbox,
                 },
+                Interruption::Table(b) => b,
             });
         }
     };

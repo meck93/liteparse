@@ -2361,6 +2361,14 @@ const TABLE_MAX_EMPTY_CELL_FRACTION_WITH_SPINE: f32 = 0.75;
 /// a page border, not a real table.
 const TABLE_MAX_PAGE_COVERAGE: f32 = 0.95;
 
+/// Global-pass only: minimum fraction of the column extent a horizontal rule
+/// must span to count as a row boundary. A full-height left/right border can
+/// union a stray box (logo, sidebar) into a grid component through the shared
+/// vertical line; that box's short rules would otherwise become phantom top
+/// rows that vacuum surrounding prose into the table. Real row boundaries span
+/// most of the table width.
+const RULED_HLINE_MIN_COVERAGE: f32 = 0.5;
+
 /// Extract horizontal and vertical line segments from a page's graphics. Each
 /// `Stroke` becomes one HSeg or VSeg depending on orientation; each stroked
 /// `Rect` contributes its four edges (cell-border rects, table frames).
@@ -2549,19 +2557,47 @@ fn build_ruled_table(
     lines: &[ProjectedLine],
     page_width: f32,
     page_height: f32,
-) -> Option<TableRun> {
+    global: bool,
+) -> Option<(TableRun, Vec<usize>)> {
     let dbg = std::env::var("LITEPARSE_DEBUG_RULED").is_ok();
-    // Distinct row y-coords (cluster again — multiple H lines may share a y).
-    let mut ys: Vec<f32> = h_indices.iter().map(|&i| hs[i].y).collect();
-    ys.sort_by(|a, b| a.total_cmp(b));
-    dedup_close(&mut ys, TABLE_GRID_CLUSTER_PT);
-
     let mut xs: Vec<f32> = v_indices.iter().map(|&i| vs[i].x).collect();
     xs.sort_by(|a, b| a.total_cmp(b));
     // Coarser, mean-centered clustering for column boundaries: cell-border
     // rects contribute paired edges 4-6pt apart that would otherwise become
     // phantom 5pt "columns" the span splitter then shreds text into.
     cluster_boundaries(&mut xs, TABLE_COL_BOUNDARY_CLUSTER_PT);
+
+    // Distinct row y-coords (cluster again — multiple H lines may share a y).
+    // In the global pass, first drop horizontal rules that span only a small
+    // fraction of the column extent (see `RULED_HLINE_MIN_COVERAGE`).
+    let raw_ys = |idxs: &[usize]| {
+        let mut v: Vec<f32> = idxs.iter().map(|&i| hs[i].y).collect();
+        v.sort_by(|a, b| a.total_cmp(b));
+        dedup_close(&mut v, TABLE_GRID_CLUSTER_PT);
+        v
+    };
+    let ys: Vec<f32> = if global && xs.len() >= 2 {
+        let col_lo = xs[0];
+        let col_hi = xs[xs.len() - 1];
+        let extent = (col_hi - col_lo).max(1.0);
+        let kept: Vec<usize> = h_indices
+            .iter()
+            .copied()
+            .filter(|&i| {
+                let h = &hs[i];
+                let ov = (h.x_max.min(col_hi) - h.x_min.max(col_lo)).max(0.0);
+                ov / extent >= RULED_HLINE_MIN_COVERAGE
+            })
+            .collect();
+        let filtered = raw_ys(&kept);
+        if filtered.len() >= 3 {
+            filtered
+        } else {
+            raw_ys(h_indices)
+        }
+    } else {
+        raw_ys(h_indices)
+    };
     if dbg {
         eprintln!(
             "[ruled] component: ys={:?} xs={:?} ({} lines in scope)",
@@ -2651,7 +2687,15 @@ fn build_ruled_table(
         cell_has_text[row][col] = true;
     };
 
-    for (idx, line) in lines.iter().enumerate() {
+    // Iterate lines top-to-bottom. The global pass receives lines in xy_cut
+    // leaf order (column-by-column), which scrambles a multi-line cell's text
+    // when concatenated in array order; y-sorted iteration restores reading
+    // order within each cell. Per-region lines are already y-ordered, so this
+    // is a no-op there.
+    let mut line_order: Vec<usize> = (0..lines.len()).collect();
+    line_order.sort_by(|&a, &b| lines[a].bbox.y.total_cmp(&lines[b].bbox.y));
+    for idx in line_order {
+        let line = &lines[idx];
         let cy = line.bbox.y + line.bbox.height * 0.5;
         if cy < ys[0] || cy > ys[n_rows] {
             continue;
@@ -2685,11 +2729,12 @@ fn build_ruled_table(
             continue;
         }
 
-        let text_spans: Vec<&TextItem> = line
+        let mut text_spans: Vec<&TextItem> = line
             .spans
             .iter()
             .filter(|s| !s.text.trim().is_empty())
             .collect();
+        text_spans.sort_by(|a, b| a.x.total_cmp(&b.x));
         let push_repl = |cells_repl: &mut Vec<Vec<String>>, row: usize, col: usize, txt: &str| {
             let txt = txt.trim();
             if txt.is_empty() {
@@ -3167,15 +3212,18 @@ fn build_ruled_table(
     let start = *consumed_indices.iter().min().unwrap();
     let end = *consumed_indices.iter().max().unwrap() + 1;
 
-    Some(TableRun {
-        start,
-        end,
-        body_start: start,
-        block: Block::Table {
-            header,
-            rows: body_rows,
+    Some((
+        TableRun {
+            start,
+            end,
+            body_start: start,
+            block: Block::Table {
+                header,
+                rows: body_rows,
+            },
         },
-    })
+        consumed_indices,
+    ))
 }
 
 /// Single-link cluster a sorted Vec of boundary coordinates, replacing each
@@ -3295,12 +3343,13 @@ pub fn detect_table_rects(
 
 /// Detect ruled-grid tables on a page from its vector graphics. Returns runs
 /// in document order (sorted by `start`).
-pub(super) fn detect_ruled_tables(
+fn detect_ruled_tables_impl(
     lines: &[ProjectedLine],
     graphics: &[GraphicPrimitive],
     page_width: f32,
     page_height: f32,
-) -> Vec<TableRun> {
+    global: bool,
+) -> Vec<(TableRun, Vec<usize>)> {
     let (hs, vs) = extract_h_v_segments(graphics);
     let hs = cluster_h_segments(hs);
     let vs = cluster_v_segments(vs);
@@ -3311,13 +3360,41 @@ pub(super) fn detect_ruled_tables(
     let mut out = Vec::new();
     for (h_idx, v_idx) in components {
         if let Some(run) =
-            build_ruled_table(&hs, &vs, &h_idx, &v_idx, lines, page_width, page_height)
+            build_ruled_table(&hs, &vs, &h_idx, &v_idx, lines, page_width, page_height, global)
         {
             out.push(run);
         }
     }
-    out.sort_by_key(|r| r.start);
+    out.sort_by_key(|(r, _)| r.start);
     out
+}
+
+/// Per-region ruled-table detection. Drops the consumed-line bookkeeping the
+/// global pass needs.
+pub(super) fn detect_ruled_tables(
+    lines: &[ProjectedLine],
+    graphics: &[GraphicPrimitive],
+    page_width: f32,
+    page_height: f32,
+) -> Vec<TableRun> {
+    detect_ruled_tables_impl(lines, graphics, page_width, page_height, false)
+        .into_iter()
+        .map(|(r, _)| r)
+        .collect()
+}
+
+/// Page-level ruled-table detection over *all* lines. A table whose rows
+/// scatter across several xy_cut leaves never has its full text in any single
+/// leaf, so per-region detection rejects it as mostly-empty; running once
+/// globally reassembles it. Returns each run with the set of line indices it
+/// consumed so the caller can pull them out of the region pipeline.
+pub(super) fn detect_ruled_tables_global(
+    lines: &[ProjectedLine],
+    graphics: &[GraphicPrimitive],
+    page_width: f32,
+    page_height: f32,
+) -> Vec<(TableRun, Vec<usize>)> {
+    detect_ruled_tables_impl(lines, graphics, page_width, page_height, true)
 }
 
 /// Count filled (non-empty) cells in a TableRun. GridFallback returns 0 so
