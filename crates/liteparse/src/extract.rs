@@ -409,6 +409,13 @@ fn extract_page_text_items(
     let debug = std::env::var("LITEPARSE_DEBUG").is_ok();
     let dbg_gaps = std::env::var("LITEPARSE_DEBUG_GAPS").is_ok();
     let space_fix = std::env::var("LITEPARSE_NO_SPACE_FIX").is_err();
+    // Empirical per-font space calibration: for fonts that expose no
+    // space-glyph metric, recover the genuine inter-word gap from the spaces
+    // PDFium *does* emit for that font (normalized by rendered em height) and
+    // feed it through the same threshold rule the metric path uses.
+    let space_cal = std::env::var("LITEPARSE_NO_SPACE_CAL").is_err();
+    let mut font_space_cal: std::collections::HashMap<String, Vec<f32>> =
+        std::collections::HashMap::new();
 
     // Pre-scan: check if ALL text on this page is invisible (render mode 3).
     // Some scanned PDFs have an invisible OCR text layer as the only text.
@@ -629,6 +636,28 @@ fn extract_page_text_items(
                     seg.start(c, &vp_loose, &vp_strict, &ch, page_rotation);
                     seg.append_ligature_tail(ligature_tail);
                 } else {
+                    // Genuine inline space PDFium emitted: sample its size
+                    // (loose gap / em height) per font, alpha-alpha only, to
+                    // calibrate the no-space-metric recovery below.
+                    if space_cal {
+                        if let Some(fk) = seg.font_name.as_ref() {
+                            let prev_alnum = seg
+                                .text
+                                .chars()
+                                .last()
+                                .is_some_and(|p| p.is_ascii_alphanumeric());
+                            if prev_alnum && c.is_ascii_alphanumeric() {
+                                let em_vp = (vp_loose.bottom - vp_loose.top).abs();
+                                let loose_gap = vp_strict.left - seg.last_char_loose_right;
+                                if em_vp > 0.0 && loose_gap > 0.0 {
+                                    let s = font_space_cal.entry(fk.clone()).or_default();
+                                    if s.len() < 512 {
+                                        s.push(loose_gap / em_vp);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     seg.commit_pending_space();
                     seg.push_char(c, &vp_loose, &vp_strict, &ch);
                     seg.append_ligature_tail(ligature_tail);
@@ -655,7 +684,22 @@ fn extract_page_text_items(
                 let thresh = if space_w > 0.0 {
                     0.7 * space_w
                 } else {
-                    0.35 * em_vp
+                    // No space-glyph metric. Prefer an empirically-recovered
+                    // space width (median genuine-space ratio for this font ×
+                    // em height) run through the same 0.7 factor as the metric
+                    // path; fall back to a fixed em fraction when we lack
+                    // enough samples for the font.
+                    let calibrated = if space_cal {
+                        seg.font_name
+                            .as_ref()
+                            .and_then(|fk| font_space_cal.get(fk))
+                            .filter(|s| s.len() >= MIN_SPACE_CAL_SAMPLES)
+                            .and_then(|s| median_f32(s))
+                            .map(|ratio| 0.7 * ratio * em_vp)
+                    } else {
+                        None
+                    };
+                    calibrated.unwrap_or(0.35 * em_vp)
                 };
                 if space_fix && both_alnum && thresh > 0.0 && loose_gap > thresh {
                     seg.text.push(' ');
@@ -873,6 +917,24 @@ fn decompose_scale(m: &pdfium::Matrix) -> (f32, f32) {
     let sx = if sx.is_nan() { 1.0 } else { sx };
     let sy = if sy.is_nan() { 1.0 } else { sy };
     (sx as f32, sy as f32)
+}
+
+/// Minimum genuine-space samples required before trusting per-font calibration.
+const MIN_SPACE_CAL_SAMPLES: usize = 6;
+
+/// Median of a slice of finite, non-negative f32 values. Returns None if empty.
+fn median_f32(values: &[f32]) -> Option<f32> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut v: Vec<f32> = values.to_vec();
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = v.len() / 2;
+    if v.len() % 2 == 0 {
+        Some((v[mid - 1] + v[mid]) / 2.0)
+    } else {
+        Some(v[mid])
+    }
 }
 
 /// Check if a font is "buggy" based on its name and type.
