@@ -415,9 +415,6 @@ fn try_two_col_direct(clusters: &[Cluster], merged_len: usize, tol: f32) -> Opti
 /// Callers may re-invoke on the spliced result to catch multiple sliced
 /// tables per page.
 pub(super) fn find_cross_region_table_merge(lines: &[ProjectedLine]) -> Option<CrossRegionMerge> {
-    if *super::flags::DISABLE_CROSS_REGION_TABLES {
-        return None;
-    }
     let debug = *super::flags::DEBUG_CROSS_REGION;
     let leaves = build_leaves(lines);
     if debug {
@@ -463,7 +460,7 @@ pub(super) fn find_cross_region_table_merge(lines: &[ProjectedLine]) -> Option<C
 
             // Extend the pair to every leaf living inside the overlap band and
             // entirely on one side of the cut (a side may itself be H-cut into
-            // multiple leaves — doc 146's Area column is).
+            // multiple leaves).
             let mut set_leaves: Vec<usize> = Vec::new();
             for (k, leaf) in leaves.iter().enumerate() {
                 let leaf_h = (leaf.y1 - leaf.y0).max(1.0);

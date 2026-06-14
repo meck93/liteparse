@@ -156,78 +156,73 @@ pub fn classify_page_with_filters(
     // mostly-empty. Run it once over all lines, pull the consumed lines out of
     // the region pipeline, and emit each table as a y-positioned interruption.
     // Runs before cross-region merge so that pass (and the region indices its
-    // runs carry) operate on the already-filtered line list. Disable with
-    // LITEPARSE_DISABLE_GLOBAL_RULED=1.
+    // runs carry) operate on the already-filtered line list.
     let mut global_ruled_tables: Vec<(f32, Block)> = Vec::new();
     let mut global_ruled_consumed: std::collections::HashSet<usize> =
         std::collections::HashSet::new();
-    if !*super::flags::DISABLE_GLOBAL_RULED {
-        for (run, consumed) in super::tables::detect_ruled_tables_global(
-            lines,
-            &page.graphics,
-            page.page_width,
-            page.page_height,
-        ) {
-            // Only rescue tables the per-region path can't see whole: those
-            // whose rows scatter across ≥2 xy_cut leaves. A table living in a
-            // single region is already handled (often better) by per-region
-            // detection — replacing it here only risks regressions.
-            let mut groups: std::collections::HashMap<&Vec<u16>, Vec<usize>> =
-                std::collections::HashMap::new();
-            for &i in &consumed {
-                groups.entry(&lines[i].region_path).or_default().push(i);
-            }
-            if groups.len() < 2 {
-                continue;
-            }
-            // If any single leaf's share of these lines already forms a table
-            // on its own, the per-region path handles this content — don't
-            // override (e.g. doc 127: a decorative frame spans the data table
-            // plus surrounding prose; the data region tables cleanly by
-            // itself, the frame would fuse prose into garbage cells).
-            let already_handled = groups.values().any(|idxs| {
-                if idxs.len() < 2 {
-                    return false;
-                }
-                let sub: Vec<ProjectedLine> = idxs.iter().map(|&i| lines[i].clone()).collect();
-                !super::tables::detect_ruled_tables(
-                    &sub,
-                    &page.graphics,
-                    page.page_width,
-                    page.page_height,
-                )
-                .is_empty()
-                    || !super::tables::detect_tables(&sub).is_empty()
-            });
-            if already_handled {
-                continue;
-            }
-            // Single-column gate. A decorative banner/frame around a prose
-            // column (just a left+right border, no interior verticals) unions
-            // into a 1-column "grid" whose lone cell is the whole paragraph
-            // block. A real data table always has ≥2 columns; a 1-col ruled
-            // region is a framed text box, never tabular. (Catches docs 028649
-            // and 06ba2a90 — both emitted a 1-col table of paragraph blobs.
-            // Word-count gating can't be used here: the genuine scattered
-            // tables this pass rescues on opendataloader — competence/legal
-            // description grids — have equally long cells.)
-            if let Block::Table { header, rows } = &run.block {
-                let cols = header
-                    .as_ref()
-                    .map(|h| h.len())
-                    .or_else(|| rows.first().map(Vec::len))
-                    .unwrap_or(0);
-                if cols < 2 {
-                    continue;
-                }
-            }
-            let top_y = consumed
-                .iter()
-                .map(|&i| lines[i].bbox.y)
-                .fold(f32::INFINITY, f32::min);
-            global_ruled_tables.push((top_y, run.block));
-            global_ruled_consumed.extend(consumed);
+    for (run, consumed) in super::tables::detect_ruled_tables_global(
+        lines,
+        &page.graphics,
+        page.page_width,
+        page.page_height,
+    ) {
+        // Only rescue tables the per-region path can't see whole: those
+        // whose rows scatter across ≥2 xy_cut leaves. A table living in a
+        // single region is already handled (often better) by per-region
+        // detection — replacing it here only risks regressions.
+        let mut groups: std::collections::HashMap<&Vec<u16>, Vec<usize>> =
+            std::collections::HashMap::new();
+        for &i in &consumed {
+            groups.entry(&lines[i].region_path).or_default().push(i);
         }
+        if groups.len() < 2 {
+            continue;
+        }
+        // If any single leaf's share of these lines already forms a table
+        // on its own, the per-region path handles this content — don't
+        // override (a decorative frame can span a data table plus surrounding
+        // prose; the data region tables cleanly by itself, while the frame
+        // would fuse prose into garbage cells).
+        let already_handled = groups.values().any(|idxs| {
+            if idxs.len() < 2 {
+                return false;
+            }
+            let sub: Vec<ProjectedLine> = idxs.iter().map(|&i| lines[i].clone()).collect();
+            !super::tables::detect_ruled_tables(
+                &sub,
+                &page.graphics,
+                page.page_width,
+                page.page_height,
+            )
+            .is_empty()
+                || !super::tables::detect_tables(&sub).is_empty()
+        });
+        if already_handled {
+            continue;
+        }
+        // Single-column gate. A decorative banner/frame around a prose
+        // column (just a left+right border, no interior verticals) unions
+        // into a 1-column "grid" whose lone cell is the whole paragraph
+        // block. A real data table always has ≥2 columns; a 1-col ruled
+        // region is a framed text box, never tabular. Word-count gating can't
+        // be used here: genuine scattered description grids have equally long
+        // cells.
+        if let Block::Table { header, rows } = &run.block {
+            let cols = header
+                .as_ref()
+                .map(|h| h.len())
+                .or_else(|| rows.first().map(Vec::len))
+                .unwrap_or(0);
+            if cols < 2 {
+                continue;
+            }
+        }
+        let top_y = consumed
+            .iter()
+            .map(|&i| lines[i].bbox.y)
+            .fold(f32::INFINITY, f32::min);
+        global_ruled_tables.push((top_y, run.block));
+        global_ruled_consumed.extend(consumed);
     }
     let global_ruled_owned: Option<Vec<ProjectedLine>> = if global_ruled_consumed.is_empty() {
         None
@@ -275,10 +270,10 @@ pub fn classify_page_with_filters(
     // leaf as its own mini-page. Paragraph / list / code / heading state is
     // scoped per leaf so a column-wrap can't silently fuse two leaves into one
     // paragraph, and table detection runs per-leaf so a misfired borderless
-    // table can't consume lines from a different leaf (the dominant Mode 15
-    // cause: a spurious table starting in one column's footnote area was
-    // eating the first lines of the next column, dropping those words from
-    // any block). Cross-leaf merges happen only in `stitch_regions` at the
+    // table can't consume lines from a different leaf (otherwise a spurious
+    // table starting in one column's footnote area eats the first lines of the
+    // next column, dropping those words from any block). Cross-leaf merges
+    // happen only in `stitch_regions` at the
     // end, where the rule is explicit and inspectable.
     let mut region_ranges: Vec<(usize, usize)> = Vec::new();
     {
@@ -397,10 +392,9 @@ pub fn classify_page_with_filters(
 
 /// Mutable per-line flow state threaded through `classify_region`: the active
 /// paragraph accumulator, the active code run, and the current list run. The
-/// flush/reset/emit methods live here so the (previously 8-parameter) closures
-/// and the six copy-pasted "reset list state" blocks collapse to method calls;
-/// methods on the struct also sidestep the borrow-checker friction of threading
-/// five `&mut Option<…>` cells through a free closure.
+/// flush/reset/emit methods live here so list-state resets collapse to method
+/// calls; methods on the struct also sidestep the borrow-checker friction of
+/// threading five `&mut Option<…>` cells through a free closure.
 #[derive(Default)]
 struct FlowState {
     paragraph: Option<ParaAccum>,
@@ -593,8 +587,9 @@ fn classify_region(
         let toc_suppress = toc_page && !is_first_toc_title;
         // Outline entries on a TOC page are the TOC itself — every entry
         // prefix-matches an outline target ("Introduction", "Part I", ...).
-        // Promoting them to `##` shreds the GT MHS structure (which has just
-        // `# Contents`). Tagged-PDF struct levels are explicit and still win.
+        // Promoting them to `##` shreds the document's heading structure (a
+        // TOC page is just `# Contents`). Tagged-PDF struct levels are explicit
+        // and still win.
         let outline_level = tagged_level.or_else(|| {
             if toc_suppress {
                 None
@@ -623,8 +618,7 @@ fn classify_region(
             // A previous line ending in a mid-word hyphen wrap means this
             // line is its continuation regardless of capitalization
             // ("…SOLAR 10.7 Billion-" / "Parameter Model: We have…").
-            let prev_hyphen_wrap = !*super::flags::DISABLE_HEADING_GUARDS
-                && prev.is_some_and(|p| ends_hyphenated(&p.text));
+            let prev_hyphen_wrap = prev.is_some_and(|p| ends_hyphenated(&p.text));
             !((starts_lower || prev_hyphen_wrap)
                 && prev.is_some_and(|p| continues_paragraph(p, line)))
         });
@@ -913,7 +907,7 @@ fn classify_region(
 /// info-string. Conservative: returns `Some` only when the body carries
 /// strong, language-specific signals; otherwise `None` (bare fence). This
 /// feeds markdown consumers that key off the language tag (e.g. syntax
-/// highlighting, ParseBench's `is_code_block` rule).
+/// highlighting).
 fn detect_code_language(lines: &[String]) -> Option<String> {
     let body = lines.join("\n");
     let trimmed = body.trim_start();
@@ -981,18 +975,18 @@ fn detect_code_language(lines: &[String]) -> Option<String> {
 /// - **Paragraph → Paragraph**: same cross-region rule as
 ///   `continues_paragraph`'s `region_path != region_path` arm: the previous
 ///   paragraph ends mid-sentence (no terminal punctuation) and the next
-///   starts lowercase. Heals the dominant Mode 15 shape (column wrap losing
-///   its tail to a separate block).
+///   starts lowercase. Heals a column wrap losing its tail to a separate
+///   block.
 /// - **Hyphen splice**: previous paragraph ends `<letter>-` and next starts
 ///   ASCII-lowercase. Already handled in `render_blocks` for the adjacent
 ///   case, but doing it here too lets the merged block flow through the
 ///   uniform paragraph-rendering path and avoids a `\n\n` slipping in when
 ///   the renderer sees an intervening non-paragraph block.
 ///
-/// Lists, code blocks, headings, and tables are *not* fused across regions
-/// in v1. A bullet point split across columns is rare and a false merge is
-/// worse than a true split; a table split across leaves indicates a
-/// projection-side issue better fixed there than papered over here.
+/// Lists, code blocks, headings, and tables are *not* fused across regions.
+/// A bullet point split across columns is rare and a false merge is worse
+/// than a true split; a table split across leaves indicates a projection-side
+/// issue better fixed there than papered over here.
 fn stitch_regions(blocks: Vec<Block>, region_starts: &[usize]) -> Vec<Block> {
     if region_starts.len() <= 1 {
         return blocks;

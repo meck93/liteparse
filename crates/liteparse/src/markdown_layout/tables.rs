@@ -266,9 +266,8 @@ fn row_spacing_cv(rows: &[(usize, &ProjectedLine, Vec<TableCell>)]) -> f32 {
 /// - its start_x matches the header start_x within tolerance (left alignment);
 /// - its end_x matches the header end_x within tolerance (right alignment).
 ///
-/// This is significantly more permissive than the historical pure-start_x
-/// match and recovers tables whose body cells are center- or right-aligned
-/// within the column.
+/// Accepting any of these (rather than start_x alone) recovers tables whose
+/// body cells are center- or right-aligned within the column.
 fn cell_aligns_track(cell: &TableCell, track_range: (f32, f32)) -> bool {
     let (ts, te) = track_range;
     let tol = TABLE_TRACK_TOLERANCE_PT;
@@ -839,8 +838,8 @@ fn try_detect_table_inferred(
     // we skipped over to find a strong row), demand a clearly multi-row body
     // before committing. A strong row found inside a header band can otherwise
     // anchor a 2-row pseudo-table that consumes the lead lines and starves the
-    // header-seeded path of the real table below it (doc 117/187 lost their
-    // tables this way). Already-strong seeds (body_start == start_idx) keep the
+    // header-seeded path of the real table below it. Already-strong seeds
+    // (body_start == start_idx) keep the
     // standard MIN_ROWS threshold and are unaffected.
     if body_start > start_idx && rows.len() < 3 {
         bail!("advanced body_start but only {} rows", rows.len());
@@ -919,8 +918,8 @@ fn try_detect_table(lines: &[ProjectedLine], start_idx: usize, floor: usize) -> 
         // Partial-cell line handling: when a line has *fewer* cells than the
         // established column count, decide between (a) wrap of prior row's
         // multi-line cell, (b) sparse new row (some columns just empty),
-        // (c) break-run. Order matters — wrap path first preserves the
-        // original behavior for tightly-stacked continuation baselines; the
+        // (c) break-run. Order matters — the wrap path runs first so
+        // tightly-stacked continuation baselines fold into the prior row; the
         // sparse-row path only triggers when there's a clear inter-row gap
         // *AND* every cell maps to a distinct column track.
         if cells.len() < column_count && !cells.is_empty() {
@@ -944,9 +943,9 @@ fn try_detect_table(lines: &[ProjectedLine], start_idx: usize, floor: usize) -> 
             // Sparse-new-row path runs FIRST. When the line sits a clear
             // inter-row gap below the previous row AND its cells map to
             // distinct tracks, treat it as a new row with empty cells at
-            // the missing tracks. This catches doc 180's `"1.0 April 30,
-            // Original"` data row following a 5-column header (the older
-            // wrap path used to merge it into the header).
+            // the missing tracks. This catches a sparse data row following a
+            // wide header (e.g. `"1.0 April 30, Original"` under a 5-column
+            // header), which a naive wrap path would merge into the header.
             if all_align_track
                 && cells.len() >= 2
                 && bottom_gap >= line_height * TABLE_SPARSE_ROW_MIN_BOTTOM_GAP_FRAC
@@ -1046,8 +1045,8 @@ fn try_detect_table(lines: &[ProjectedLine], start_idx: usize, floor: usize) -> 
     }
 
     // Promote the first body row to header iff every cell in it is bold
-    // (matches pymupdf4llm's "bold-or-filled" heuristic; fills require fork
-    // data). Skipped inside `finalize_table_run` when a header was absorbed.
+    // (a bold-or-filled heuristic; fills require fork data). Skipped inside
+    // `finalize_table_run` when a header was absorbed.
     let bold_eligible = rows[0].2.iter().all(|c| c.bold);
     finalize_table_run(
         lines,
@@ -1435,10 +1434,9 @@ fn try_detect_description_list(lines: &[ProjectedLine], start_idx: usize) -> Opt
     }
     // Anti-false-positive #1b: at least one row must have BOTH columns
     // containing alphabetic characters. Filters two common shapes that are
-    // *not* description-list tables: TOC entries (col 1 = page number, e.g.
-    // doc 016/171) and footnote lists (col 0 = footnote number, e.g. doc
-    // 008). Real description-list tables have at least one row of
-    // word-on-word.
+    // *not* description-list tables: TOC entries (col 1 = page number) and
+    // footnote lists (col 0 = footnote number). Real description-list tables
+    // have at least one row of word-on-word.
     let has_alpha_pair = rows.iter().any(|(_, c0, c1)| {
         c0.chars().any(|c| c.is_alphabetic()) && c1.chars().any(|c| c.is_alphabetic())
     });
@@ -1601,7 +1599,7 @@ const TABLE_CLUSTER_MAX_FAILED_ROW_FRAC: f32 = 0.3;
 const TABLE_CLUSTER_MAX_HEADER_LINES: usize = 4;
 
 fn merge_fragmented_table_clusters(runs: Vec<TableRun>, lines: &[ProjectedLine]) -> Vec<TableRun> {
-    if runs.len() < 2 || *super::flags::DISABLE_CLUSTER_MERGE {
+    if runs.len() < 2 {
         return runs;
     }
     let dbgt = *super::flags::DEBUG_TABLE;
@@ -1975,12 +1973,12 @@ fn build_union_table(
     }
 
     // NOTE: no vertical wrap-merge here. Gap-based merging of multi-line
-    // cells was tried and reverted — inside uniformly-leaded tables the gap
-    // between a wrapped cell line and a genuine next row is identical, so
-    // any threshold either shreds multi-line cells (no merge) or fuses
-    // adjacent logical rows (merge). Re-extracted clusters keep one row per
-    // line; multi-line-cell recovery needs a stronger signal (ruled-grid row
-    // boundaries, or label-column row anchoring).
+    // cells doesn't work — inside uniformly-leaded tables the gap between a
+    // wrapped cell line and a genuine next row is identical, so any threshold
+    // either shreds multi-line cells (no merge) or fuses adjacent logical rows
+    // (merge). Re-extracted clusters keep one row per line; multi-line-cell
+    // recovery needs a stronger signal (ruled-grid row boundaries, or
+    // label-column row anchoring).
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut failed_count = 0usize;
     for line in &lines[window_start..window_end] {
@@ -2363,11 +2361,11 @@ const TABLE_CROSS_TOLERANCE_PT: f32 = 3.0;
 const TABLE_COL_BOUNDARY_CLUSTER_PT: f32 = 6.0;
 
 /// Reject ruled-table candidates whose empty-cell fraction exceeds this.
-/// NOTE: this can't be loosened to recover blank worksheets/forms — a real
-/// sparse table (doc 180, a 4-col Version History, ~75% empty) and a spurious
-/// grid from decorative layout boxes (doc 198, a TOC, also ~75% empty) are
-/// indistinguishable on empty-fraction, and relaxing it net-regressed TEDS by
-/// ~0.09 on the bench (more false tables than real forms recovered).
+/// This can't be loosened to recover blank worksheets/forms: a real sparse
+/// table (e.g. a 4-col version history, ~75% empty) and a spurious grid from
+/// decorative layout boxes (e.g. a TOC, also ~75% empty) are indistinguishable
+/// on empty-fraction, and relaxing it surfaces more false tables than real
+/// forms recovered.
 const TABLE_MAX_EMPTY_CELL_FRACTION: f32 = 0.30;
 
 /// Fraction of a row or column that must be populated to qualify the grid as
@@ -2700,9 +2698,10 @@ impl CellGrid {
             .collect();
     }
 
-    /// Drop "phantom rows" produced by stacked thin border-strip rects (doc 149
-    /// rules each visual row as top-strip ~1pt / body ~22pt / bottom-strip ~5pt,
-    /// each surviving the 2pt clustering as its own grid row). A row is dropped
+    /// Drop "phantom rows" produced by stacked thin border-strip rects (some
+    /// generators rule each visual row as top-strip ~1pt / body ~22pt /
+    /// bottom-strip ~5pt, each surviving the 2pt clustering as its own grid
+    /// row). A row is dropped
     /// iff it has no text in any cell AND its height is < 80% of the median
     /// non-empty row height — the height gate preserves real fill-in-the-blank
     /// forms whose empty body rows are full height. `ys` are the row boundaries
@@ -2737,8 +2736,8 @@ impl CellGrid {
         kept_row_heights
     }
 
-    /// Mirror `collapse_phantom_rows` on columns: some ruled tables (doc 149)
-    /// draw left/right borders as thin strip rects ~5pt wide, which become
+    /// Mirror `collapse_phantom_rows` on columns: some ruled tables draw
+    /// left/right borders as thin strip rects ~5pt wide, which become
     /// phantom text-less columns. Drop a column iff it is both empty AND
     /// narrower than 30% of the median text-bearing column. `xs` are the column
     /// boundaries (length `n_cols + 1`).
@@ -2794,7 +2793,7 @@ fn assign_cells(
     // Straddle census: spans that cross an interior column boundary by a
     // clear margin on both sides. A real ruled table keeps text inside cells
     // (the occasional PDFium merged run aside); decorative slide/layout boxes
-    // over flowing prose slice through most runs (doc 198, a TOC slide).
+    // over flowing prose slice through most runs.
     const STRADDLE_MARGIN_PT: f32 = 3.0;
     let mut span_total = 0usize;
     let mut span_straddle = 0usize;
@@ -2937,7 +2936,7 @@ fn assign_cells(
     if dbg {
         eprintln!("[ruled]   straddle {span_straddle}/{span_total} = {straddle_frac:.2}");
     }
-    if span_total >= 6 && straddle_frac > 0.45 && !*super::flags::DISABLE_STRADDLE_GUARD {
+    if span_total >= 6 && straddle_frac > 0.45 {
         if dbg {
             eprintln!("[ruled]   REJECT straddle-frac {straddle_frac:.2}");
         }
@@ -2947,13 +2946,13 @@ fn assign_cells(
     Some((grid, consumed_indices))
 }
 
-/// Colspan header-band flattening (Mode 5 / TRM): a sparse top row whose alpha
-/// spanning label covers several columns ("North America" over its
-/// Revenue/Units sub-columns) followed by a dense label row is a stacked
-/// header. Flatten rows `0..=b` from the colspan-semantics (`repl`) grid into
-/// one header row (per-column top-to-bottom join), so each column carries its
-/// full layer chain ("North America Revenue") — that chain is what header-keyed
-/// evals (and readers) need. Returns `(header_row, body_start)` or `None`.
+/// Colspan header-band flattening: a sparse top row whose alpha spanning label
+/// covers several columns ("North America" over its Revenue/Units sub-columns)
+/// followed by a dense label row is a stacked header. Flatten rows `0..=b` from
+/// the colspan-semantics (`repl`) grid into one header row (per-column
+/// top-to-bottom join), so each column carries its full layer chain ("North
+/// America Revenue") — that chain is what header-keyed consumers (and readers)
+/// need. Returns `(header_row, body_start)` or `None`.
 fn flatten_header_band(
     cells: &[Vec<String>],
     cell_has_text: &[Vec<bool>],
@@ -3011,7 +3010,7 @@ fn flatten_header_band(
         })
 }
 
-/// Stacked-header merge (Mode 5): some generators rule every text baseline of a
+/// Stacked-header merge: some generators rule every text baseline of a
 /// wrapped header cell, slicing one logical header row into several thin sparse
 /// rows ("Rated" / "Voltage" / "(VDC)" each in its own band). When the top
 /// `k ≥ 2` rows are individually sparse but their union covers most columns AND
@@ -3099,7 +3098,7 @@ fn merge_stacked_header(
 /// - **long-prose table**: a large (≥5×3) grid with a bold header band covering
 ///   ≥3 columns and a dense (≥70%-fill) inner description column — a
 ///   multi-line legal/reference table whose description wraps over many empty
-///   continuation rows (docs 088/089/090).
+///   continuation rows.
 /// - **flattened header**: a fired colspan header flatten is table evidence on
 ///   par with a spine.
 /// With a spine but above the higher WITH_SPINE ceiling, still reject (unless a
@@ -3283,9 +3282,9 @@ fn build_ruled_table(
 
     // Collapse phantom rows (text-less thin border-strip rects) then phantom
     // columns (text-less narrow border strips). A real table with one phantom
-    // border-strip column (doc 149) drops exactly one; a chart whose vertical
-    // grid-lines merged with text data (doc 078) collapses to 1 col and is
-    // rejected below, letting the borderless detector handle it.
+    // border-strip column drops exactly one; a chart whose vertical grid-lines
+    // merged with text data collapses to 1 col and is rejected below, letting
+    // the borderless detector handle it.
     let kept_row_heights = grid.collapse_phantom_rows(&ys);
     let n_rows = grid.n_rows();
     if n_rows < 2 {
@@ -3451,7 +3450,7 @@ fn find_bucket(boundaries: &[f32], val: f32) -> Option<usize> {
 /// content entirely — its only job is to find the bbox of every H/V grid
 /// component so the XY-cut layout pass can treat those regions as obstacles
 /// and avoid slicing tables column-wise (the failure mode that produces
-/// column-major reading order on docs 083/120/130/etc.). Empty-cell-fraction
+/// column-major reading order). Empty-cell-fraction
 /// and other quality filters are deliberately skipped here: we want the bbox
 /// even of sparse forms or partially-filled grids, because the obstacle
 /// machinery only cares about geometry.
@@ -3592,11 +3591,11 @@ fn run_filled_cells(run: &TableRun) -> usize {
 /// ranges overlap the ruled run normally wins (path-based geometry is a
 /// stronger signal than text-alignment heuristics), with two exceptions:
 ///   1. A single-column ruled run yields to a multi-column borderless run
-///      covering the same range (vertical separators may be implicit; doc 078).
+///      covering the same range (vertical separators may be implicit).
 ///   2. A sparse ruled run yields to a denser borderless run — decorative
 ///      vector boxes around titles / callout banners produce ruled "tables"
 ///      with few filled cells; when a borderless detector finds a much denser
-///      real table in the same region, prefer it (doc 051).
+///      real table in the same region, prefer it.
 pub(super) fn merge_table_runs(
     mut ruled: Vec<TableRun>,
     borderless: Vec<TableRun>,

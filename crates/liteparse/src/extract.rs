@@ -458,12 +458,10 @@ fn extract_page_text_items(
 
     let debug = std::env::var("LITEPARSE_DEBUG").is_ok();
     let dbg_gaps = std::env::var("LITEPARSE_DEBUG_GAPS").is_ok();
-    let space_fix = std::env::var("LITEPARSE_NO_SPACE_FIX").is_err();
     // Empirical per-font space calibration: for fonts that expose no
     // space-glyph metric, recover the genuine inter-word gap from the spaces
     // PDFium *does* emit for that font (normalized by rendered em height) and
     // feed it through the same threshold rule the metric path uses.
-    let space_cal = std::env::var("LITEPARSE_NO_SPACE_CAL").is_err();
     let mut font_space_cal: std::collections::HashMap<String, Vec<f32>> =
         std::collections::HashMap::new();
 
@@ -643,9 +641,9 @@ fn extract_page_text_items(
                 // are spaced apart, unlike periods in abbreviations like "U.S.").
                 // A loosely-kerned abbreviation/sentence period sits at ~1x the
                 // average char width; genuine no-space dot leaders run far wider
-                // (2x+). The earlier 0.4x cutoff sheared the trailing period off
-                // abbreviations like "Sci."/"Chem." whenever the font kerned the
-                // period a hair loose, dropping it entirely downstream.
+                // (2x+). The 2x cutoff avoids shearing the trailing period off
+                // abbreviations like "Sci."/"Chem." when the font kerns the
+                // period a hair loose, which would drop it entirely downstream.
                 c == '.' && seg.has_non_dot_content() && gap > seg.avg_char_width() * 2.0
             };
 
@@ -694,21 +692,19 @@ fn extract_page_text_items(
                     // Genuine inline space PDFium emitted: sample its size
                     // (loose gap / em height) per font, alpha-alpha only, to
                     // calibrate the no-space-metric recovery below.
-                    if space_cal {
-                        if let Some(fk) = seg.font_name.as_ref() {
-                            let prev_alnum = seg
-                                .text
-                                .chars()
-                                .last()
-                                .is_some_and(|p| p.is_ascii_alphanumeric());
-                            if prev_alnum && c.is_ascii_alphanumeric() {
-                                let em_vp = (vp_loose.bottom - vp_loose.top).abs();
-                                let loose_gap = vp_strict.left - seg.last_char_loose_right;
-                                if em_vp > 0.0 && loose_gap > 0.0 {
-                                    let s = font_space_cal.entry(fk.clone()).or_default();
-                                    if s.len() < 512 {
-                                        s.push(loose_gap / em_vp);
-                                    }
+                    if let Some(fk) = seg.font_name.as_ref() {
+                        let prev_alnum = seg
+                            .text
+                            .chars()
+                            .last()
+                            .is_some_and(|p| p.is_ascii_alphanumeric());
+                        if prev_alnum && c.is_ascii_alphanumeric() {
+                            let em_vp = (vp_loose.bottom - vp_loose.top).abs();
+                            let loose_gap = vp_strict.left - seg.last_char_loose_right;
+                            if em_vp > 0.0 && loose_gap > 0.0 {
+                                let s = font_space_cal.entry(fk.clone()).or_default();
+                                if s.len() < 512 {
+                                    s.push(loose_gap / em_vp);
                                 }
                             }
                         }
@@ -744,19 +740,16 @@ fn extract_page_text_items(
                     // em height) run through the same 0.7 factor as the metric
                     // path; fall back to a fixed em fraction when we lack
                     // enough samples for the font.
-                    let calibrated = if space_cal {
-                        seg.font_name
-                            .as_ref()
-                            .and_then(|fk| font_space_cal.get(fk))
-                            .filter(|s| s.len() >= MIN_SPACE_CAL_SAMPLES)
-                            .and_then(|s| median_f32(s))
-                            .map(|ratio| 0.7 * ratio * em_vp)
-                    } else {
-                        None
-                    };
+                    let calibrated = seg
+                        .font_name
+                        .as_ref()
+                        .and_then(|fk| font_space_cal.get(fk))
+                        .filter(|s| s.len() >= MIN_SPACE_CAL_SAMPLES)
+                        .and_then(|s| median_f32(s))
+                        .map(|ratio| 0.7 * ratio * em_vp);
                     calibrated.unwrap_or(0.35 * em_vp)
                 };
-                if space_fix && both_alnum && thresh > 0.0 && loose_gap > thresh {
+                if both_alnum && thresh > 0.0 && loose_gap > thresh {
                     seg.text.push(' ');
                 }
                 seg.push_char(c, &vp_loose, &vp_strict, &ch);
@@ -777,14 +770,12 @@ fn extract_page_text_items(
     let vb_w = (view_box.right - view_box.left).abs();
     let vb_h = (view_box.top - view_box.bottom).abs();
     let pre_clip_count = items.len();
-    if std::env::var("LITEPARSE_DISABLE_OFFPAGE_CLIP").is_err() {
-        items.retain(|it| {
-            it.x < vb_w
-                && it.x + it.width.max(0.1) > 0.0
-                && it.y < vb_h
-                && it.y + it.height.max(0.1) > 0.0
-        });
-    }
+    items.retain(|it| {
+        it.x < vb_w
+            && it.x + it.width.max(0.1) > 0.0
+            && it.y < vb_h
+            && it.y + it.height.max(0.1) > 0.0
+    });
     if debug && items.len() < pre_clip_count {
         eprintln!(
             "[extract-debug] off-page clip removed {} items",
@@ -851,21 +842,12 @@ fn dedup_overlapping_items(items: &mut Vec<TextItem>, debug: bool) {
 
             if items[i].text == items[j].text {
                 // Exact text match: require strong bounding-box overlap before
-                // dedup. Originally this fired on *any* overlap on the theory
-                // that overlapping identical text is two layers of the same
-                // content (re-stamped redactions, etc). But the same word
-                // routinely appears more than once on a page in different
-                // positions; if the items' bboxes happen to share even a sliver
-                // of area (e.g. one column's word vertically adjacent to
-                // another column's identical word with a slack loose-box), we
-                // were silently dropping the legitimate first occurrence.
-                //
-                // Reproducer: olmocr 0083fb21…page_8 — column 1 has the word
-                // "source" in row 2 and again in row 3; the dedup nuked the
-                // row 2 "source" in favor of the row 3 one (which later merged
-                // into "source income is reduced (the"), making the row 2
-                // sentence read as "made to U.S. \n . In situations…" with
-                // "source income" missing.
+                // dedup. The same word routinely appears more than once on a
+                // page in different positions; firing on any overlap would drop
+                // a legitimate occurrence when two identical words' bboxes share
+                // even a sliver of area (e.g. one column's word vertically
+                // adjacent to another column's identical word with a slack
+                // loose-box), corrupting that line.
                 //
                 // Require ≥50% overlap of the smaller item — same threshold
                 // as the non-exact branch. True duplicate stamps overlap
@@ -1036,8 +1018,6 @@ struct GlyphDecoder {
     /// fraction of control/PUA unicodes across the page).
     garbage_fonts: std::collections::HashSet<usize>,
     debug: bool,
-    /// Kill-switch for A/B benching: LITEPARSE_DISABLE_GLYPH_NAMES=1
-    disabled: bool,
 }
 
 struct FontGlyphInfo {
@@ -1061,7 +1041,6 @@ impl GlyphDecoder {
             last_obj: 0,
             last_key: 0,
             debug,
-            disabled: std::env::var("LITEPARSE_DISABLE_GLYPH_NAMES").is_ok(),
         }
     }
 
@@ -1069,9 +1048,6 @@ impl GlyphDecoder {
     /// and the current unicode is suspicious (control/PUA/sentinel/map-error)
     /// or the font's unicode mapping is untrusted altogether.
     fn decode(&mut self, ch: &pdfium::TextChar, unicode: u32) -> Option<&str> {
-        if self.disabled {
-            return None;
-        }
         let cheap_suspicious = matches!(unicode, 0 | 0xFFFE | 0xFFFF)
             || (unicode < 0x20 && !matches!(unicode, 0x09 | 0x0A | 0x0D))
             || (0xE000..=0xF8FF).contains(&unicode);

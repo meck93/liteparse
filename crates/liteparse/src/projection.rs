@@ -1,12 +1,5 @@
 use crate::types::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::LazyLock;
-
-/// Kill-switch for using the matrix-derived `font_height` as the size signal
-/// on matrix-baked-size lines (raw `font_size ≈ 1.0`). When set, fall back to
-/// the legacy char-weighted bbox-height estimate.
-static DISABLE_FONT_HEIGHT_SIZE: LazyLock<bool> =
-    LazyLock::new(|| std::env::var("LITEPARSE_DISABLE_FONT_HEIGHT_SIZE").is_ok());
 
 const FLOATING_SPACES: usize = 2;
 const COLUMN_SPACES: usize = 4;
@@ -3424,7 +3417,6 @@ fn xy_find_column_cut(
     // aligns with a column peak that has strict evidence.
     let mut near_starts: Vec<f32> = Vec::new();
     let near_gap_floor = gutter_gap * 0.6;
-    let disable_rescue = std::env::var("LITEPARSE_DISABLE_NEARSTART_RESCUE").is_ok();
     let mut k = 0;
     while k < sorted.len() {
         let band_y = items[sorted[k]].item.y;
@@ -3497,7 +3489,7 @@ fn xy_find_column_cut(
     // prose. Require near-exact agreement with at least 2 strict starts.
     let mut rescued = 0usize;
     let mut counted_starts: Vec<f32> = line_starts.clone();
-    if !near_starts.is_empty() && !disable_rescue {
+    if !near_starts.is_empty() {
         const RESCUE_ALIGN_TOL_PT: f32 = 1.5;
         for &x in &near_starts {
             let support = line_starts
@@ -3563,9 +3555,9 @@ fn xy_find_column_cut(
     // body region with ~36 lines split across 2 columns, each peak only
     // carries 5–6 line-starts after the histogram spreads them across the
     // page width — well under 10. Use `max(line_starts / 6, 4)`: still rules
-    // out the tiny indent peaks, but a 2-column region with ~5 lines/peak now
-    // qualifies. Capped by the original `XY_COLUMN_MIN_LINES_PER_PEAK` to
-    // preserve behavior on large regions.
+    // out the tiny indent peaks, but a 2-column region with ~5 lines/peak
+    // qualifies. Capped by `XY_COLUMN_MIN_LINES_PER_PEAK` so large regions
+    // keep the stricter floor.
     let adaptive_min = (n_starts / 6).clamp(4, XY_COLUMN_MIN_LINES_PER_PEAK);
     peaks.retain(|(_, c)| *c >= adaptive_min);
     if peaks.len() < 2 {
@@ -3708,9 +3700,7 @@ fn xy_find_column_cut(
         //   1. min_fill floor (MIN_FILL_HARD_FLOOR = 0.38) — rejects
         //      pages where any column has narrow text in many bands
         //      (e.g. table with numeric column). Real tables have
-        //      at least one column with fill ≤ 0.36 (verified on
-        //      Coca Cola 10-k page 1, Apple 10-k page 1, BRWS, SERFF,
-        //      Goldman Sachs, etc.).
+        //      at least one column with fill ≤ 0.36.
         //   2. Band-count-weighted avg_fill ≥ XY_COLUMN_MIN_FILL —
         //      catches table layouts where ALL columns are uniformly
         //      narrow (no column dominates the weighted average).
@@ -3862,10 +3852,7 @@ fn xy_find_column_cut(
             }
         }
     }
-    let cut_x = if gutter_left.is_finite()
-        && gutter_left > peaks[li].0
-        && std::env::var("LITEPARSE_DISABLE_GUTTER_CUT").is_err()
-    {
+    let cut_x = if gutter_left.is_finite() && gutter_left > peaks[li].0 {
         (gutter_left + boundary) * 0.5
     } else {
         mid_centers
@@ -4050,8 +4037,7 @@ fn xy_cut_rec(
     // Run the histogram probe unconditionally: besides being a fallback cut
     // source, its fill gate is the region-level table detector — when it
     // rejects with "tabular", density V-cuts must not slice the table's
-    // inter-column gutters either (the dominant column-major-table failure:
-    // SERFF_CA page2024 et al).
+    // inter-column gutters either (the dominant column-major-table failure).
     let mut region_tabular = false;
     let column_full = xy_find_column_cut(items, &idxs, &bbox, median_h, &mut region_tabular);
     let column = if v.is_none() && h.is_none() {
@@ -4108,7 +4094,7 @@ fn xy_cut_rec(
     }
     // Build a priority-ordered candidate list.
     //
-    // **Primary** is the cut the original logic would have picked
+    // **Primary** is the cut chosen by the main resolution order
     // (banner → column → H/V resolved by score margin). **Fallback** is
     // the column-histogram probe — but ONLY that, not density V or the
     // other density axis. The column histogram has strong discriminators
@@ -4138,7 +4124,7 @@ fn xy_cut_rec(
     // When the histogram fill gate classified this region as tabular, a
     // density V valley here is a table gutter, not a column boundary —
     // suppress it so the table reaches the table detectors row-major.
-    let v = if region_tabular && std::env::var("LITEPARSE_DISABLE_TABULAR_V_SUPPRESS").is_err() {
+    let v = if region_tabular {
         if debug_xy && v.is_some() {
             let pad = "  ".repeat(depth as usize);
             eprintln!("[xy d={depth}]{pad} -> SUPPRESS density V (region tabular)");
@@ -4703,8 +4689,7 @@ fn build_one_line(
         .unwrap_or(0.0);
     // Fallback: when PDFium reports font_size ≤ 1.5 (size baked into the text
     // matrix), use char-weighted bbox height so the size-dependent grouping
-    // (tables, paragraphs) keeps its well-tuned behavior. Documented in
-    // MARKDOWN_PROGRESS.md.
+    // (tables, paragraphs) keeps its well-tuned behavior.
     let (dominant_font_size, font_size_is_estimated) = if dominant_size_from_font > 1.5 {
         (dominant_size_from_font, false)
     } else {
@@ -4721,8 +4706,9 @@ fn build_one_line(
     // jitter-free on-page size, far better than the bbox-height estimate above
     // for separating headings from body. Routed only to body-size + heading-map
     // (see `heading_font_size` doc on ProjectedLine); table/paragraph grouping
-    // deliberately keeps the bbox-height value to avoid regressing TEDS.
-    let heading_font_size = if dominant_size_from_font > 1.5 || *DISABLE_FONT_HEIGHT_SIZE {
+    // deliberately keeps the bbox-height value to avoid regressing table
+    // structure.
+    let heading_font_size = if dominant_size_from_font > 1.5 {
         None
     } else {
         font_height_weights

@@ -383,11 +383,10 @@ pub(super) fn looks_like_bold_heading(
     //   - ≥3 space-separated words after the break
     //   - line ends with mid-word "-" (wrap continuation) OR is >50 chars
     //   - first char after the break is uppercase ASCII letter
-    let colon_ok = !*super::flags::DISABLE_HEADING_GUARDS;
     let run_in_break = text
         .find(". ")
         .map(|p| (p, 2))
-        .or_else(|| text.find(": ").map(|p| (p, 2)).filter(|_| colon_ok));
+        .or_else(|| text.find(": ").map(|p| (p, 2)));
     if let Some((pos, sep_len)) = run_in_break {
         let before = &text[..pos];
         // Section-number prefix exemption: when the segment before ". " is a

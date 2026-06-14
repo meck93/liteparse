@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn preserves_title_at_top_without_chrome_pattern() {
         // A document title at the top should NOT be stripped — no pattern
-        // hint AND we no longer fall back on font-size delta.
+        // hint, and font-size delta alone is not a chrome signal.
         let lines = vec![
             line("My Important Document", 50.0, 30.0, 18.0, 18.0),
             line("Author Name", 50.0, 60.0, 10.0, 10.0),

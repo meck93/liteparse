@@ -1,10 +1,8 @@
-//! Process-wide debug / kill-switch flags, read once from the environment.
+//! Debug-logging flags, read once from the environment.
 //!
-//! Each flag mirrors a `LITEPARSE_*` env var. `env::var` scans the process
-//! environment table and allocates on a miss, so per-line hot paths cache the
-//! lookup in a `LazyLock` instead of re-reading on every call. Each static is
-//! `true` when the variable is **set** (matching the historical
-//! `env::var(..).is_ok()`); "disable" call sites negate it.
+//! Each flag mirrors a `LITEPARSE_*` env var and is `true` when the variable is
+//! set. `env::var` allocates on every call, so these cache the lookup in a
+//! `LazyLock` rather than re-reading on per-line hot paths.
 
 use std::sync::LazyLock;
 
@@ -20,11 +18,3 @@ env_set_flag!(DEBUG_MD, "LITEPARSE_DEBUG_MD");
 env_set_flag!(DEBUG_TABLE, "LITEPARSE_DEBUG_TABLE");
 env_set_flag!(DEBUG_RULED, "LITEPARSE_DEBUG_RULED");
 env_set_flag!(DEBUG_CROSS_REGION, "LITEPARSE_DEBUG_CROSS_REGION");
-env_set_flag!(DISABLE_GLOBAL_RULED, "LITEPARSE_DISABLE_GLOBAL_RULED");
-env_set_flag!(DISABLE_HEADING_GUARDS, "LITEPARSE_DISABLE_HEADING_GUARDS");
-env_set_flag!(
-    DISABLE_CROSS_REGION_TABLES,
-    "LITEPARSE_DISABLE_CROSS_REGION_TABLES"
-);
-env_set_flag!(DISABLE_CLUSTER_MERGE, "LITEPARSE_DISABLE_CLUSTER_MERGE");
-env_set_flag!(DISABLE_STRADDLE_GUARD, "LITEPARSE_DISABLE_STRADDLE_GUARD");

@@ -27,8 +27,7 @@ impl SpanStyle {
 
 /// Escape characters that would otherwise be interpreted as markdown emphasis.
 /// Deliberately narrow: only `*`, `_`, and backslash. Aggressive escaping
-/// (`#`, `[`, backticks, etc.) breaks more output than it saves in practice —
-/// pymupdf4llm takes the same conservative stance.
+/// (`#`, `[`, backticks, etc.) breaks more output than it saves in practice.
 pub(super) fn escape_inline(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -81,8 +80,7 @@ fn apply_style(inner: &str, style: SpanStyle) -> String {
 ///
 /// Per-line shortcut: when every non-whitespace span shares the same style,
 /// emit one outer wrap around the collapsed line text instead of run-by-run
-/// (matches pymupdf4llm; avoids `**foo** **bar** **baz**` noise on uniformly
-/// styled lines).
+/// (avoids `**foo** **bar** **baz**` noise on uniformly styled lines).
 ///
 /// Falls back to `collapse_whitespace(line.text)` when the line has no usable
 /// spans (e.g. OCR-only lines where TextItem styling isn't populated).

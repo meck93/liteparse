@@ -223,7 +223,7 @@ pub(super) fn continues_paragraph(prev: &ProjectedLine, cur: &ProjectedLine) -> 
 /// - `raw` — plain text (no emphasis markers). Used for the paragraph-uniform
 ///   shortcut: if every contributing line had the same uniform style, we wrap
 ///   the whole paragraph once with `wrap_emphasis(raw, …)` to avoid the
-///   `**foo** **bar** **baz**` per-line noise pymupdf4llm warns about.
+///   `**foo** **bar** **baz**` per-line noise.
 /// - `inline` — per-line markdown with emphasis baked in via
 ///   `render_line_inline`. Used when the paragraph contains mid-line emphasis
 ///   shifts or lines with differing uniform styles.
