@@ -533,8 +533,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     is_complex.len()
                 );
                 println!(
-                    "{:>4}  {:>7}  {:>5}  {:>6}  {:>7}  {:>7}  {:>5}",
-                    "page", "text", "cov", "images", "garbled", "vector", "ocr"
+                    "{:>4}  {:>7}  {:>5}  {:>6}  {:>6}  {:>7}  {:>7}  {:>5}",
+                    "page", "text", "cov", "images", "imgcov", "garbled", "vector", "ocr"
                 );
                 for c in &is_complex {
                     let vector = match c.uncovered_vector_area {
@@ -542,7 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         None => "-".to_string(),
                     };
                     println!(
-                        "{:>4}  {:>7}  {:>5.2}  {:>6}  {:>7}  {:>7}  {:>5}",
+                        "{:>4}  {:>7}  {:>5.2}  {:>6}  {:>6.2}  {:>7}  {:>7}  {:>5}",
                         c.page_number,
                         c.text_length,
                         c.text_coverage,
@@ -551,6 +551,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             "no"
                         },
+                        c.image_coverage,
                         if c.is_garbled { "yes" } else { "no" },
                         vector,
                         if c.needs_ocr { "yes" } else { "no" },

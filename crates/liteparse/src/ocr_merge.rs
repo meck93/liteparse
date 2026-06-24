@@ -15,6 +15,14 @@ use serde::Serialize;
 /// pages at this threshold.
 const UNCOVERED_VECTOR_AREA_THRESHOLD: f32 = 400.0;
 
+/// Minimum side length (pt) for a raster image object to count toward image
+/// coverage; smaller objects (rule lines, bullets, icons) are ignored.
+const MIN_IMAGE_SIZE_PT: f32 = 25.0;
+
+/// A single image at or above this fraction of the page is treated as a
+/// full-page background and ignored.
+const MAX_IMAGE_PAGE_COVERAGE: f32 = 0.9;
+
 /// Owned page bitmap prepared for OCR. Indices refer to positions in the `pages` slice.
 pub(crate) struct RenderedPage {
     pub idx: usize,
@@ -29,6 +37,18 @@ pub struct PageComplexityStats {
     pub text_length: usize,
     pub text_coverage: f32,
     pub has_substantial_images: bool,
+    /// Number of raster image objects counted on the page, after the size and
+    /// single-image coverage filters.
+    pub image_block_count: usize,
+    /// Combined area of the counted images over the page area, clamped to 1.0.
+    /// Stacked or overlapping images can inflate the raw sum past the truly
+    /// covered fraction, hence the clamp — read it as "summed image-bbox area,"
+    /// not unique covered area.
+    pub image_coverage: f32,
+    /// Area of the single largest counted image over the page area, clamped to
+    /// 1.0. Useful for telling a single full-bleed scan apart from many small
+    /// inline figures that sum to a similar `image_coverage`.
+    pub largest_image_coverage: f32,
     /// Filled vector-outline area not covered by native text, in pt². `None`
     /// when a cheaper predicate already flagged the page for OCR, so this
     /// expensive page-object walk was skipped (it wasn't the deciding signal).
@@ -55,9 +75,26 @@ pub(crate) fn calculate_page_complexity(
         .filter(|item| !is_unusable_native(item))
         .map(|item| item.text.len())
         .sum();
-    let has_images = !page_obj.image_bounds(25.0, 0.9).is_empty();
+    let image_bounds = page_obj.image_bounds(MIN_IMAGE_SIZE_PT, MAX_IMAGE_PAGE_COVERAGE);
+    let has_images = !image_bounds.is_empty();
 
     let page_area = page.page_width * page.page_height;
+
+    let (image_area_sum, largest_image_area) =
+        image_bounds
+            .iter()
+            .fold((0.0_f32, 0.0_f32), |(sum, max), b| {
+                let area = b.width.max(0.0) * b.height.max(0.0);
+                (sum + area, max.max(area))
+            });
+    let (image_coverage, largest_image_coverage) = if page_area > 0.0 {
+        (
+            (image_area_sum / page_area).min(1.0),
+            (largest_image_area / page_area).min(1.0),
+        )
+    } else {
+        (0.0, 0.0)
+    };
     let text_bbox_area: f32 = page
         .text_items
         .iter()
@@ -97,6 +134,9 @@ pub(crate) fn calculate_page_complexity(
         text_length,
         text_coverage,
         has_substantial_images: has_images,
+        image_block_count: image_bounds.len(),
+        image_coverage,
+        largest_image_coverage,
         uncovered_vector_area,
         is_garbled,
         page_area,
