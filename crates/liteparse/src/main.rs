@@ -225,9 +225,10 @@ struct IsComplexCommand {
     /// Input file path
     file: String,
 
-    /// Whether to output the result as JSON (true/false) or plain text (true/false)
+    /// Emit dense, whitespace-free JSON instead of pretty-printed (still valid
+    /// for `jq` and friends).
     #[arg(long)]
-    json: bool,
+    compact: bool,
 
     /// Max pages to parse
     #[arg(long, default_value = "1000")]
@@ -517,46 +518,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let complex_pages = is_complex.iter().filter(|c| c.needs_ocr).count();
 
-            if cmd.json && !cmd.quiet {
-                let json = serde_json::to_string(&is_complex)?;
-                println!("{}", json);
-            } else if !cmd.quiet {
+            // Always emit JSON on stdout so the command composes with `jq` and
+            // friends without a flag. Pretty by default for human readability;
+            // `--compact` drops the whitespace. Both parse identically.
+            let json = if cmd.compact {
+                serde_json::to_string(&is_complex)?
+            } else {
+                serde_json::to_string_pretty(&is_complex)?
+            };
+            println!("{}", json);
+
+            // The human-readable verdict goes to stderr so it never pollutes the
+            // JSON on stdout. The exit code below carries the same signal for
+            // scripts that don't want to read either stream.
+            if !cmd.quiet {
                 let verdict = if complex_pages > 0 {
                     "COMPLEX"
                 } else {
                     "SIMPLE"
                 };
-                println!(
+                eprintln!(
                     "{} — {}/{} page(s) need OCR",
                     verdict,
                     complex_pages,
                     is_complex.len()
                 );
-                println!(
-                    "{:>4}  {:>7}  {:>5}  {:>6}  {:>6}  {:>7}  {:>7}  {:>5}",
-                    "page", "text", "cov", "images", "imgcov", "garbled", "vector", "ocr"
-                );
-                for c in &is_complex {
-                    let vector = match c.uncovered_vector_area {
-                        Some(area) => format!("{:.0}", area),
-                        None => "-".to_string(),
-                    };
-                    println!(
-                        "{:>4}  {:>7}  {:>5.2}  {:>6}  {:>6.2}  {:>7}  {:>7}  {:>5}",
-                        c.page_number,
-                        c.text_length,
-                        c.text_coverage,
-                        if c.has_substantial_images {
-                            "yes"
-                        } else {
-                            "no"
-                        },
-                        c.image_coverage,
-                        if c.is_garbled { "yes" } else { "no" },
-                        vector,
-                        if c.needs_ocr { "yes" } else { "no" },
-                    );
-                }
             }
 
             // Exit non-zero when any page needs OCR, so the command is usable as

@@ -425,10 +425,12 @@ struct JsPageComplexityStats {
     image_block_count: usize,
     image_coverage: f32,
     largest_image_coverage: f32,
+    full_page_image: bool,
     uncovered_vector_area: Option<f32>,
     is_garbled: bool,
     page_area: f32,
     needs_ocr: bool,
+    reasons: Vec<String>,
 }
 
 impl JsPageComplexityStats {
@@ -441,10 +443,16 @@ impl JsPageComplexityStats {
             image_block_count: stats.image_block_count,
             image_coverage: stats.image_coverage,
             largest_image_coverage: stats.largest_image_coverage,
+            full_page_image: stats.full_page_image,
             uncovered_vector_area: stats.uncovered_vector_area,
             is_garbled: stats.is_garbled,
             page_area: stats.page_area,
             needs_ocr: stats.needs_ocr,
+            reasons: stats
+                .reasons
+                .iter()
+                .map(|r| r.as_str().to_string())
+                .collect(),
         }
     }
 }

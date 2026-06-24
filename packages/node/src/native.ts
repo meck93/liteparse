@@ -110,10 +110,12 @@ export interface NativePageComplexityStats {
   imageBlockCount: number;
   imageCoverage: number;
   largestImageCoverage: number;
+  fullPageImage: boolean;
   uncoveredVectorArea?: number;
   isGarbled: boolean;
   pageArea: number;
   needsOcr: boolean;
+  reasons: string[];
 }
 
 export interface LiteParseNative {

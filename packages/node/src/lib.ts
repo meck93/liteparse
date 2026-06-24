@@ -133,8 +133,14 @@ export interface PageComplexityStats {
   imageBlockCount: number;
   /** Summed image-bbox area over page area, clamped to 1. */
   imageCoverage: number;
-  /** Largest single image's area over page area, clamped to 1. */
+  /** Largest single *counted* image's area over page area, clamped to 1. */
   largestImageCoverage: number;
+  /**
+   * A single raster covers ≥90% of the page. Full-page backgrounds are excluded
+   * from the image coverage fields, so this is the only signal that tells a scan
+   * apart from a blank page — both otherwise report no text and no images.
+   */
+  fullPageImage: boolean;
   /**
    * Filled vector-outline area not covered by native text, in pt². `undefined`
    * when a cheaper signal already decided the page, so this walk was skipped.
@@ -142,8 +148,14 @@ export interface PageComplexityStats {
   uncoveredVectorArea?: number;
   isGarbled: boolean;
   pageArea: number;
-  /** Verdict: whether this page should be sent through OCR. */
+  /** Verdict: whether this page needs more than the cheap text-only path. */
   needsOcr: boolean;
+  /**
+   * Every reason the page was flagged (e.g. `"scanned"`, `"sparse-text"`,
+   * `"garbled"`). Empty exactly when `needsOcr` is false. This is the value to
+   * route on; new reasons may be added over time.
+   */
+  reasons: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -248,10 +260,12 @@ export class LiteParse {
       imageBlockCount: s.imageBlockCount,
       imageCoverage: s.imageCoverage,
       largestImageCoverage: s.largestImageCoverage,
+      fullPageImage: s.fullPageImage,
       uncoveredVectorArea: s.uncoveredVectorArea ?? undefined,
       isGarbled: s.isGarbled,
       pageArea: s.pageArea,
       needsOcr: s.needsOcr,
+      reasons: s.reasons,
     }));
   }
 

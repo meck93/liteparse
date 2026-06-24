@@ -81,10 +81,12 @@ class PageComplexityStats:
     image_block_count: int
     image_coverage: float
     largest_image_coverage: float
+    full_page_image: bool
     uncovered_vector_area: Optional[float]
     is_garbled: bool
     page_area: float
     needs_ocr: bool
+    reasons: list[str]
 
 
 @dataclass

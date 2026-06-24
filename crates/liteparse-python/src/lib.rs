@@ -252,6 +252,8 @@ struct PyPageComplexityStats {
     #[pyo3(get)]
     largest_image_coverage: f32,
     #[pyo3(get)]
+    full_page_image: bool,
+    #[pyo3(get)]
     uncovered_vector_area: Option<f32>,
     #[pyo3(get)]
     is_garbled: bool,
@@ -259,6 +261,8 @@ struct PyPageComplexityStats {
     page_area: f32,
     #[pyo3(get)]
     needs_ocr: bool,
+    #[pyo3(get)]
+    reasons: Vec<String>,
 }
 
 #[pymethods]
@@ -281,10 +285,16 @@ impl PyPageComplexityStats {
             image_block_count: stats.image_block_count,
             image_coverage: stats.image_coverage,
             largest_image_coverage: stats.largest_image_coverage,
+            full_page_image: stats.full_page_image,
             uncovered_vector_area: stats.uncovered_vector_area,
             is_garbled: stats.is_garbled,
             page_area: stats.page_area,
             needs_ocr: stats.needs_ocr,
+            reasons: stats
+                .reasons
+                .iter()
+                .map(|r| r.as_str().to_string())
+                .collect(),
         }
     }
 }

@@ -216,10 +216,12 @@ class LiteParse:
                     image_block_count=s.image_block_count,
                     image_coverage=s.image_coverage,
                     largest_image_coverage=s.largest_image_coverage,
+                    full_page_image=s.full_page_image,
                     uncovered_vector_area=s.uncovered_vector_area,
                     is_garbled=s.is_garbled,
                     page_area=s.page_area,
                     needs_ocr=s.needs_ocr,
+                    reasons=list(s.reasons),
                 )
                 for s in native_stats
             ]

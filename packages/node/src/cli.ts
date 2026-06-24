@@ -147,7 +147,7 @@ program
     "Check if a document is 'complex' enough to require OCR or other advanced parsing",
   )
   .argument("<file>", "Path to the document file")
-  .option("--json", "Output the result as JSON")
+  .option("--compact", "Emit dense, whitespace-free JSON instead of pretty")
   .option("--max-pages <n>", "Max pages to parse", parseInt)
   .option(
     "--target-pages <pages>",
@@ -168,36 +168,23 @@ program
 
       const complexPages = stats.filter((s) => s.needsOcr).length;
 
-      if (opts.json) {
-        process.stdout.write(JSON.stringify(stats));
-        process.stdout.write("\n");
-      } else {
+      // Always emit JSON on stdout so the command composes with `jq` without a
+      // flag. Pretty by default; `--compact` drops the whitespace. Both parse
+      // identically for any reader.
+      process.stdout.write(
+        opts.compact
+          ? JSON.stringify(stats)
+          : JSON.stringify(stats, null, 2),
+      );
+      process.stdout.write("\n");
+
+      // Human verdict goes to stderr so it never pollutes the JSON on stdout;
+      // the exit code below carries the same signal for scripts.
+      if (!opts.quiet) {
         const verdict = complexPages > 0 ? "COMPLEX" : "SIMPLE";
-        console.log(
+        console.error(
           `${verdict} — ${complexPages}/${stats.length} page(s) need OCR`,
         );
-        console.log(
-          ["page", "text", "cov", "images", "garbled", "vector", "ocr"].join(
-            "\t",
-          ),
-        );
-        for (const s of stats) {
-          const vector =
-            s.uncoveredVectorArea !== undefined
-              ? s.uncoveredVectorArea.toFixed(0)
-              : "-";
-          console.log(
-            [
-              s.pageNumber,
-              s.textLength,
-              s.textCoverage.toFixed(2),
-              s.hasSubstantialImages ? "yes" : "no",
-              s.isGarbled ? "yes" : "no",
-              vector,
-              s.needsOcr ? "yes" : "no",
-            ].join("\t"),
-          );
-        }
       }
 
       // Exit non-zero when any page needs OCR, so the command is usable as a
