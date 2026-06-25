@@ -12,7 +12,7 @@ These servers allow you to use alternative OCR engines instead of the built-in T
 | Speed | Moderate | Moderate | Fast (2-3x) | Moderate (GPU recommended) |
 | Accuracy (Latin) | Good | Good | Good | Excellent |
 | Accuracy (CJK) | Fair | Good | Excellent | Excellent |
-| Languages | 100+ | 80+ | 80+ | 90+ |
+| Languages | 100+ | 80+ | 80+ | 91 |
 | Memory | In-process | Separate | Separate | Separate |
 
 **Recommendations:**

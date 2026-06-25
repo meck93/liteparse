@@ -16,6 +16,24 @@ uv run server.py
 The first run downloads Surya model weights from Hugging Face and may take a few
 minutes; weights are cached afterward.
 
+## Inference backend (required)
+
+Surya 2 is a VLM-backed model: text recognition runs through a separate
+inference backend, which you must provide. Surya does **not** bundle it.
+
+- **CPU / local (llama.cpp):** install the `llama-server` binary so Surya's
+  `llamacpp` backend can spawn it:
+  - macOS: `brew install llama.cpp`
+  - Linux: `brew install llama.cpp`, or download a release from
+    https://github.com/ggml-org/llama.cpp/releases and put `llama-server` on
+    your `PATH` (or set `LLAMA_CPP_BINARY=/path/to/llama-server`).
+- **GPU (vllm):** set `SURYA_INFERENCE_BACKEND=vllm` (requires a CUDA GPU).
+- **External server:** point `SURYA_INFERENCE_URL` at an already-running Surya
+  inference server to attach without spawning one locally.
+
+Without a backend, startup succeeds and `GET /health` works, but `POST /ocr`
+returns a 500 with "llama-server binary not found".
+
 ## Usage
 
 The service exposes:
@@ -55,10 +73,16 @@ block's HTML stripped to plain text. This conforms to the LiteParse OCR API spec
 
 ## Supported Languages
 
-Surya 2 supports 90+ languages with a single multilingual model, with strong
-performance on non-Latin scripts. No `language` parameter is required.
+Surya 2 is a single multilingual model — no `language` parameter is required
+(the `language` field is accepted but ignored).
 
-Full details: https://github.com/datalab-to/surya
+Per Surya's own benchmark, it scores an **87.2% overall pass rate across 91
+languages**, with 38 of the 91 languages scoring ≥ 90% and 76 scoring ≥ 80%,
+covering text accuracy, layout, tables, math, and reading order. It has strong
+performance across both Latin and non-Latin scripts.
+
+- Full 91-language results: https://github.com/datalab-to/surya/blob/master/static/docs/multilingual.md
+- Project overview: https://github.com/datalab-to/surya
 
 ## Device / GPU
 
