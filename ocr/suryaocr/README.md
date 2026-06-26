@@ -34,6 +34,50 @@ inference backend, which you must provide. Surya does **not** bundle it.
 Without a backend, startup succeeds and `GET /health` works, but `POST /ocr`
 returns a 500 with "llama-server binary not found".
 
+## Docker (GPU, single image)
+
+The provided `Dockerfile` builds **one image that runs both the API and the
+model server on a GPU**. It is based on the official CUDA llama.cpp image
+(`ghcr.io/ggml-org/llama.cpp:server-cuda`), which ships a `qwen35`-capable
+`llama-server` (Surya 2's custom GGUF architecture) with `libggml-cuda` and the
+CUDA runtime. Surya spawns `llama-server` from `PATH` inside the same container,
+so no sidecar or separate inference service is needed.
+
+```bash
+# Build
+docker build -t suryaocr-liteparse:cuda .
+
+# Run (requires the NVIDIA container runtime)
+docker run --rm --gpus all -p 8830:8830 \
+  -v "$HOME/.cache/suryaocr-models:/models" \
+  suryaocr-liteparse:cuda
+```
+
+- `--gpus all` exposes the host GPUs; all model layers are offloaded
+  (`LLAMA_CPP_NGL=99`).
+- The `-v …:/models` mount caches weights (`HF_HOME=/models`). The **first**
+  `POST /ocr` downloads the GGUF weights from Hugging Face and spawns
+  `llama-server` (a few minutes); subsequent requests reuse the cache and the
+  running server.
+
+The image bakes in the backend configuration: `SURYA_INFERENCE_BACKEND=llamacpp`,
+`LLAMA_CPP_NGL=99`, and `SURYA_GUIDED_LAYOUT=false`. The last one is required on
+the upstream `llama-server` build: Surya's layout step is the only request that
+sends a grammar, and its regex `pattern` breaks llama.cpp's
+json-schema→GBNF converter (`failed to parse grammar`), which otherwise yields
+empty results. With guided layout off, layout runs as free generation (Surya
+parses the output itself) and the rest of the pipeline never uses a grammar.
+
+To use a CUDA GPU via vLLM instead of bundled llama.cpp, set
+`SURYA_INFERENCE_BACKEND=vllm` (see the backend section above).
+
+Verify it is up:
+
+```bash
+curl http://localhost:8830/health
+curl -X POST -F "file=@image.png" http://localhost:8830/ocr
+```
+
 ## Usage
 
 The service exposes:
@@ -86,13 +130,20 @@ performance across both Latin and non-Latin scripts.
 
 ## Device / GPU
 
-Surya auto-detects the best available device. Force a device with the
-`TORCH_DEVICE` environment variable:
+There are two device knobs, for two different parts of the pipeline:
 
-```bash
-TORCH_DEVICE=cuda uv run server.py   # GPU
-TORCH_DEVICE=cpu  uv run server.py   # CPU
-```
+- `LLAMA_CPP_NGL` controls how many layers of the **VLM** (the model that reads
+  text) the `llamacpp` backend offloads to the GPU. `99` offloads everything;
+  `0` keeps it on CPU. The Docker image sets `99`.
+- `TORCH_DEVICE` controls the device for Surya's **helper torch models**
+  (e.g. layout). Surya auto-detects, or you can force it:
+
+  ```bash
+  TORCH_DEVICE=cuda uv run server.py   # GPU
+  TORCH_DEVICE=cpu  uv run server.py   # CPU
+  ```
+
+For a turnkey GPU deployment, prefer the Docker image above — it wires both up.
 
 ## Use with LiteParse
 
