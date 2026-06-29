@@ -126,8 +126,7 @@ pub struct OcrRetryConfig {
     /// recovers and every parked page retries at the same instant).
     pub jitter_ms: u64,
     /// Short fixed backoff for a mid-stream connection drop ("socket hang up"),
-    /// which is usually a single dropped keepalive rather than overload —
-    /// matches the worker's fast-retry special case.
+    /// which is usually a single dropped keepalive rather than overload.
     pub fast_retry_ms: u64,
     /// Per-request timeout.
     pub request_timeout_ms: u64,
@@ -135,9 +134,9 @@ pub struct OcrRetryConfig {
     /// no hedging (one request per attempt — the default). With multiple
     /// delays (e.g. `[0, 5000, 10000]`), each attempt fires a *duplicate*
     /// request at every delay and takes the first to succeed, cancelling the
-    /// rest — a tail-latency trick (mirrors the worker's `OCR_HEDGE_DELAYS_MS`)
-    /// that trades extra OCR-server load for lower p99 latency when a request
-    /// lands on a slow/stuck pod. Opt-in: callers enable it via config.
+    /// rest — a tail-latency trick that trades extra OCR-server load for
+    /// lower p99 latency when a request lands on a slow/stuck pod.
+    /// Opt-in: callers enable it via config.
     pub hedge_delays_ms: Vec<u64>,
 }
 
@@ -249,8 +248,7 @@ impl HttpOcrEngine {
         }
     }
 
-    /// Override the retry/backoff policy (production uses the worker-parity
-    /// `Default`; tests inject a fast, low-attempt policy).
+    /// Override the retry/backoff policy
     pub fn with_retry(mut self, retry: OcrRetryConfig) -> Self {
         self.retry = retry;
         self
