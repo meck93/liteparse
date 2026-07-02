@@ -12,11 +12,12 @@ use std::pin::Pin;
 
 use js_sys::{Function, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
+use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use liteparse::config::{ImageMode, LiteParseConfig, OutputFormat};
-use liteparse::ocr::{OcrEngine, OcrOptions, OcrResult};
+use liteparse::config::{ImageMode, LiteParseConfig as CoreConfig, OutputFormat};
+use liteparse::ocr::{OcrEngine, OcrOptions, OcrResult as CoreOcrResult};
 use liteparse::parser::LiteParse as CoreLiteParse;
 use liteparse::search;
 use liteparse::types::PdfInput;
@@ -35,9 +36,10 @@ pub fn __wasm_start() {
 // JS-facing config (camelCase to match the Node package)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, Tsify)]
+#[tsify(into_wasm_abi, from_wasm_abi)]
 #[serde(rename_all = "camelCase", default)]
-struct JsLiteParseConfig {
+pub struct LiteParseConfig {
     ocr_language: Option<String>,
     ocr_enabled: Option<bool>,
     ocr_server_url: Option<String>,
@@ -46,7 +48,9 @@ struct JsLiteParseConfig {
     max_pages: Option<usize>,
     target_pages: Option<String>,
     dpi: Option<f32>,
+    #[tsify(type = "\"json\" | \"text\" | \"markdown\" | \"md\"")]
     output_format: Option<String>,
+    #[tsify(type = "\"off\" | \"none\" | \"placeholder\" | \"embed\"")]
     image_mode: Option<String>,
     extract_links: Option<bool>,
     ocr_failure_fatal: Option<bool>,
@@ -57,9 +61,9 @@ struct JsLiteParseConfig {
     emit_word_boxes: Option<bool>,
 }
 
-impl JsLiteParseConfig {
-    fn into_core(self) -> Result<LiteParseConfig, JsError> {
-        let mut cfg = LiteParseConfig::default();
+impl LiteParseConfig {
+    fn into_core(self) -> Result<CoreConfig, JsError> {
+        let mut cfg = CoreConfig::default();
         if let Some(v) = self.ocr_language {
             cfg.ocr_language = v;
         }
@@ -129,7 +133,7 @@ impl JsLiteParseConfig {
         Ok(cfg)
     }
 
-    fn from_core(cfg: &LiteParseConfig) -> Self {
+    fn from_core(cfg: &CoreConfig) -> Self {
         Self {
             ocr_language: Some(cfg.ocr_language.clone()),
             ocr_enabled: Some(cfg.ocr_enabled),
@@ -168,67 +172,71 @@ impl JsLiteParseConfig {
 // JS-facing parse result
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsWordBox<'a> {
-    text: &'a str,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+pub struct WordBox {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsTextItem<'a> {
-    text: &'a str,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+pub struct TextItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
-    font_name: Option<&'a str>,
+    pub font_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    font_size: Option<f32>,
+    pub font_size: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    confidence: Option<f32>,
+    pub confidence: Option<f32>,
     /// Rotation in degrees (viewport space).
-    rotation: f32,
+    pub rotation: f32,
     /// Per-word sub-boxes for attribution. Omitted when empty (the default —
     /// only populated when parsing with `emitWordBoxes: true`).
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    words: Vec<JsWordBox<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub words: Option<Vec<WordBox>>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsParsedPage<'a> {
-    page_num: usize,
-    width: f32,
-    height: f32,
-    text: &'a str,
-    markdown: &'a str,
-    text_items: Vec<JsTextItem<'a>>,
+pub struct ParsedPage {
+    pub page_num: usize,
+    pub width: f32,
+    pub height: f32,
+    pub text: String,
+    pub markdown: String,
+    pub text_items: Vec<TextItem>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsParseResult<'a> {
-    pages: Vec<JsParsedPage<'a>>,
-    text: &'a str,
-    images: Vec<JsExtractedImage<'a>>,
+pub struct ParseResult {
+    pub pages: Vec<ParsedPage>,
+    pub text: String,
+    pub images: Vec<ExtractedImage>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsExtractedImage<'a> {
-    id: &'a str,
-    page: u32,
-    format: &'a str,
-    /// Serialized as a JS `number[]`. Callers that want a Uint8Array can
-    /// wrap with `new Uint8Array(image.bytes)`. (Could be upgraded to a real
-    /// Uint8Array later by switching to a hand-rolled to_value path.)
-    bytes: &'a [u8],
+pub struct ExtractedImage {
+    pub id: String,
+    pub page: u32,
+    pub format: String,
+    /// Raw image bytes, serialized as a JS `number[]`. Callers that want a
+    /// Uint8Array can wrap with `new Uint8Array(image.bytes)`.
+    pub bytes: Vec<u8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -267,8 +275,9 @@ impl OcrEngine for JsOcrEngine {
         options: &'b OcrOptions,
     ) -> Pin<
         Box<
-            dyn Future<Output = Result<Vec<OcrResult>, Box<dyn std::error::Error + Send + Sync>>>
-                + '_,
+            dyn Future<
+                    Output = Result<Vec<CoreOcrResult>, Box<dyn std::error::Error + Send + Sync>>,
+                > + '_,
         >,
     > {
         // Copy bytes into a JS Uint8Array up-front (must happen on the
@@ -301,12 +310,12 @@ impl OcrEngine for JsOcrEngine {
                 .await
                 .map_err(|e| format!("ocrEngine.recognize rejected: {:?}", e))?;
 
-            let parsed: Vec<JsOcrResult> = serde_wasm_bindgen::from_value(resolved)
+            let parsed: Vec<OcrResult> = serde_wasm_bindgen::from_value(resolved)
                 .map_err(|e| format!("ocrEngine.recognize result decode failed: {:?}", e))?;
 
             Ok(parsed
                 .into_iter()
-                .map(|r| OcrResult {
+                .map(|r| CoreOcrResult {
                     text: r.text,
                     bbox: r.bbox,
                     confidence: r.confidence,
@@ -317,23 +326,45 @@ impl OcrEngine for JsOcrEngine {
     }
 }
 
-#[derive(Deserialize)]
-struct JsOcrResult {
-    text: String,
-    bbox: [f32; 4],
-    confidence: f32,
+#[derive(Deserialize, Tsify)]
+#[tsify(from_wasm_abi)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrResult {
+    pub text: String,
+    pub bbox: [f32; 4],
+    pub confidence: f32,
     #[serde(default)]
-    polygon: Option<[[f32; 2]; 4]>,
+    pub polygon: Option<[[f32; 2]; 4]>,
 }
 
 // ---------------------------------------------------------------------------
 // LiteParse class (JS-facing)
 // ---------------------------------------------------------------------------
 
+// Hand-written TS types that tsify can't derive: the JS-implemented OCR engine
+// interface, and the constructor init object (the config plus an optional
+// `ocrEngine`). `LiteParseConfig` and `OcrResult` are generated by tsify.
+#[wasm_bindgen(typescript_custom_section)]
+const TS_EXTRA: &'static str = r#"
+export interface OcrEngine {
+  recognize(imageData: Uint8Array, width: number, height: number, language: string): Promise<OcrResult[]>;
+}
+
+export interface LiteParseInit extends LiteParseConfig {
+  ocrEngine?: OcrEngine;
+}
+"#;
+
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(typescript_type = "LiteParseInit")]
+    pub type LiteParseInit;
+}
+
 #[wasm_bindgen]
 pub struct LiteParse {
     inner: CoreLiteParse,
-    config: LiteParseConfig,
+    config: CoreConfig,
 }
 
 #[wasm_bindgen]
@@ -341,7 +372,8 @@ impl LiteParse {
     /// Construct a new parser. `config` is a JS object (all fields optional).
     /// If `config.ocrEngine` is present, it is wired up as the OCR backend.
     #[wasm_bindgen(constructor)]
-    pub fn new(config: JsValue) -> Result<LiteParse, JsError> {
+    pub fn new(config: LiteParseInit) -> Result<LiteParse, JsError> {
+        let config: JsValue = config.into();
         let ocr_engine_js = if config.is_object() {
             Reflect::get(&config, &JsValue::from_str("ocrEngine"))
                 .ok()
@@ -350,8 +382,8 @@ impl LiteParse {
             None
         };
 
-        let js_cfg: JsLiteParseConfig = if config.is_undefined() || config.is_null() {
-            JsLiteParseConfig::default()
+        let js_cfg: LiteParseConfig = if config.is_undefined() || config.is_null() {
+            LiteParseConfig::default()
         } else {
             serde_wasm_bindgen::from_value(config)
                 .map_err(|e| JsError::new(&format!("invalid config: {}", e)))?
@@ -369,100 +401,98 @@ impl LiteParse {
 
     /// Return the resolved config (camelCase JS object).
     #[wasm_bindgen(getter)]
-    pub fn config(&self) -> Result<JsValue, JsError> {
-        let cfg = JsLiteParseConfig::from_core(&self.config);
-        serde_wasm_bindgen::to_value(&cfg)
-            .map_err(|e| JsError::new(&format!("serialize config failed: {}", e)))
+    pub fn config(&self) -> LiteParseConfig {
+        LiteParseConfig::from_core(&self.config)
     }
 
     /// Parse PDF bytes. Returns `Promise<ParseResult>`.
-    pub async fn parse(&self, data: Vec<u8>) -> Result<JsValue, JsError> {
+    pub async fn parse(&self, data: Vec<u8>) -> Result<ParseResult, JsError> {
         let result = self
             .inner
             .parse_input(PdfInput::Bytes(data))
             .await
             .map_err(|e| JsError::new(&format!("parse failed: {}", e)))?;
 
-        let js_pages: Vec<JsParsedPage<'_>> = result
+        let pages: Vec<ParsedPage> = result
             .pages
             .iter()
-            .map(|p| JsParsedPage {
+            .map(|p| ParsedPage {
                 page_num: p.page_number,
                 width: p.page_width,
                 height: p.page_height,
-                text: &p.text,
-                markdown: &p.markdown,
+                text: p.text.clone(),
+                markdown: p.markdown.clone(),
                 text_items: p
                     .text_items
                     .iter()
-                    .map(|i| JsTextItem {
-                        text: &i.text,
+                    .map(|i| TextItem {
+                        text: i.text.clone(),
                         x: i.x,
                         y: i.y,
                         width: i.width,
                         height: i.height,
-                        font_name: i.font_name.as_deref(),
+                        font_name: i.font_name.clone(),
                         font_size: i.font_size,
                         confidence: i.confidence,
                         rotation: i.rotation,
-                        words: i
-                            .words
-                            .iter()
-                            .map(|w| JsWordBox {
-                                text: &w.text,
-                                x: w.x,
-                                y: w.y,
-                                width: w.width,
-                                height: w.height,
-                            })
-                            .collect(),
+                        words: if i.words.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                i.words
+                                    .iter()
+                                    .map(|w| WordBox {
+                                        text: w.text.clone(),
+                                        x: w.x,
+                                        y: w.y,
+                                        width: w.width,
+                                        height: w.height,
+                                    })
+                                    .collect(),
+                            )
+                        },
                     })
                     .collect(),
             })
             .collect();
 
-        let js_images: Vec<JsExtractedImage> = result
+        let images: Vec<ExtractedImage> = result
             .images
             .iter()
-            .map(|img| JsExtractedImage {
-                id: &img.id,
+            .map(|img| ExtractedImage {
+                id: img.id.clone(),
                 page: img.page,
-                format: &img.format,
-                bytes: &img.bytes,
+                format: img.format.clone(),
+                bytes: img.bytes.clone(),
             })
             .collect();
-        let js_result = JsParseResult {
-            pages: js_pages,
-            text: &result.text,
-            images: js_images,
-        };
 
-        serde_wasm_bindgen::to_value(&js_result)
-            .map_err(|e| JsError::new(&format!("serialize result failed: {}", e)))
+        Ok(ParseResult {
+            pages,
+            text: result.text.clone(),
+            images,
+        })
     }
 
     /// Determine per-page complexity for the given PDF bytes. Returns
     /// `Promise<PageComplexityStats[]>` — a cheap pre-OCR check with per-page
     /// signals and a `needsOcr` verdict.
     #[wasm_bindgen(js_name = isComplex)]
-    pub async fn is_complex(&self, data: Vec<u8>) -> Result<JsValue, JsError> {
+    pub async fn is_complex(&self, data: Vec<u8>) -> Result<Vec<PageComplexityStats>, JsError> {
         let stats = self
             .inner
             .is_complex(PdfInput::Bytes(data))
             .await
             .map_err(|e| JsError::new(&format!("is_complex failed: {}", e)))?;
 
-        let js_stats: Vec<JsPageComplexityStats> =
-            stats.iter().map(JsPageComplexityStats::from_rust).collect();
-
-        serde_wasm_bindgen::to_value(&js_stats)
-            .map_err(|e| JsError::new(&format!("serialize result failed: {}", e)))
+        Ok(stats.iter().map(PageComplexityStats::from_rust).collect())
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsPageComplexityStats {
+pub struct PageComplexityStats {
     page_number: usize,
     text_length: usize,
     text_coverage: f32,
@@ -478,7 +508,7 @@ struct JsPageComplexityStats {
     reasons: Vec<String>,
 }
 
-impl JsPageComplexityStats {
+impl PageComplexityStats {
     fn from_rust(stats: &liteparse::ocr_merge::PageComplexityStats) -> Self {
         Self {
             page_number: stats.page_number,
@@ -506,30 +536,32 @@ impl JsPageComplexityStats {
 // searchItems (standalone function)
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Tsify)]
+#[tsify(from_wasm_abi)]
 #[serde(rename_all = "camelCase")]
-struct JsSearchTextItem {
-    text: String,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
+pub struct SearchTextItem {
+    pub text: String,
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
     #[serde(default)]
-    font_name: Option<String>,
+    pub font_name: Option<String>,
     #[serde(default)]
-    font_size: Option<f32>,
+    pub font_size: Option<f32>,
     #[serde(default)]
-    confidence: Option<f32>,
+    pub confidence: Option<f32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Tsify)]
+#[tsify(from_wasm_abi)]
 #[serde(rename_all = "camelCase", default)]
-struct JsSearchOptions {
-    phrase: String,
-    case_sensitive: bool,
+pub struct SearchOptions {
+    pub phrase: String,
+    pub case_sensitive: bool,
 }
 
-impl Default for JsSearchOptions {
+impl Default for SearchOptions {
     fn default() -> Self {
         Self {
             phrase: String::new(),
@@ -540,13 +572,8 @@ impl Default for JsSearchOptions {
 
 /// Search text items for phrase matches, returning merged items with combined bounding boxes.
 #[wasm_bindgen(js_name = "searchItems")]
-pub fn search_items(items: JsValue, options: JsValue) -> Result<JsValue, JsError> {
-    let js_items: Vec<JsSearchTextItem> = serde_wasm_bindgen::from_value(items)
-        .map_err(|e| JsError::new(&format!("invalid items: {}", e)))?;
-    let js_opts: JsSearchOptions = serde_wasm_bindgen::from_value(options)
-        .map_err(|e| JsError::new(&format!("invalid options: {}", e)))?;
-
-    let rust_items: Vec<liteparse::types::TextItem> = js_items
+pub fn search_items(items: Vec<SearchTextItem>, options: SearchOptions) -> Vec<TextItem> {
+    let rust_items: Vec<liteparse::types::TextItem> = items
         .into_iter()
         .map(|i| liteparse::types::TextItem {
             text: i.text,
@@ -562,37 +589,39 @@ pub fn search_items(items: JsValue, options: JsValue) -> Result<JsValue, JsError
         .collect();
 
     let options = search::SearchOptions {
-        phrase: js_opts.phrase,
-        case_sensitive: js_opts.case_sensitive,
+        phrase: options.phrase,
+        case_sensitive: options.case_sensitive,
     };
 
     let results = search::search_items(&rust_items, &options);
-    let js_results: Vec<JsTextItem<'_>> = results
+    results
         .iter()
-        .map(|i| JsTextItem {
-            text: &i.text,
+        .map(|i| TextItem {
+            text: i.text.clone(),
             x: i.x,
             y: i.y,
             width: i.width,
             height: i.height,
-            font_name: i.font_name.as_deref(),
+            font_name: i.font_name.clone(),
             font_size: i.font_size,
             confidence: i.confidence,
             rotation: i.rotation,
-            words: i
-                .words
-                .iter()
-                .map(|w| JsWordBox {
-                    text: &w.text,
-                    x: w.x,
-                    y: w.y,
-                    width: w.width,
-                    height: w.height,
-                })
-                .collect(),
+            words: if i.words.is_empty() {
+                None
+            } else {
+                Some(
+                    i.words
+                        .iter()
+                        .map(|w| WordBox {
+                            text: w.text.clone(),
+                            x: w.x,
+                            y: w.y,
+                            width: w.width,
+                            height: w.height,
+                        })
+                        .collect(),
+                )
+            },
         })
-        .collect();
-
-    serde_wasm_bindgen::to_value(&js_results)
-        .map_err(|e| JsError::new(&format!("serialize results failed: {}", e)))
+        .collect()
 }
