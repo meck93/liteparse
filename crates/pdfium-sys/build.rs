@@ -152,7 +152,8 @@ fn pdfium_asset_stem() -> &'static str {
         // Universal macOS binary works for both, but we prefer arch-specific
         "x86_64-unknown-linux-gnu" => "pdfium-linux-x64",
         "x86_64-unknown-linux-musl" => "pdfium-linux-musl-x64",
-        "aarch64-unknown-linux-gnu" | "aarch64-unknown-linux-musl" => "pdfium-linux-arm64",
+        "aarch64-unknown-linux-gnu" => "pdfium-linux-arm64",
+        "aarch64-unknown-linux-musl" => "pdfium-linux-musl-arm64",
         "armv7-unknown-linux-gnueabihf" => "pdfium-linux-arm",
         "x86_64-pc-windows-msvc" | "x86_64-pc-windows-gnu" => "pdfium-win-x64",
         "aarch64-pc-windows-msvc" => "pdfium-win-arm64",

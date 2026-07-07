@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eux
 
+TARGET="${TARGET:-x86_64-unknown-linux-musl}"
+
 # tesseract-rs's build.rs hard-codes -DCMAKE_CXX_COMPILER=clang++ and -stdlib=libc++,
 # so we need real clang + libc++ in the image (gcc/g++ from build-base is not enough).
 # Alpine's libc++ links against llvm-libunwind (NOT the GNU libunwind, which conflicts).
@@ -15,12 +17,12 @@ apk add --no-cache \
   tesseract-ocr-dev leptonica-dev \
   openssl-dev openssl-libs-static zlib-static
 
-curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable -t x86_64-unknown-linux-musl
+curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable -t "$TARGET"
 . /root/.cargo/env
 
 # napi produces a cdylib (.node) which MUST be dynamically linked against libc.
 export RUSTFLAGS="-C target-feature=-crt-static"
-npx napi build --cargo-cwd ../../crates/liteparse-napi --platform --release --js false --dts native.d.ts --target x86_64-unknown-linux-musl .
+npx napi build --cargo-cwd ../../crates/liteparse-napi --platform --release --js false --dts native.d.ts --target "$TARGET" .
 
 # The resulting .node has DT_NEEDED entries for the clang+libc++ runtime
 # (libc++.so.1, libc++abi.so.1, libunwind.so.1) which are not present on stock

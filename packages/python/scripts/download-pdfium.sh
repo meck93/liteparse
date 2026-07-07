@@ -25,8 +25,8 @@ case "$TARGET" in
   x86_64-apple-darwin)         ASSET="pdfium-mac-x64";        DYLIB="libpdfium.dylib" ;;
   x86_64-unknown-linux-gnu)    ASSET="pdfium-linux-x64";      DYLIB="libpdfium.so"    ;;
   aarch64-unknown-linux-gnu)   ASSET="pdfium-linux-arm64";    DYLIB="libpdfium.so"    ;;
-  x86_64-unknown-linux-musl)   ASSET="pdfium-linux-musl-x64"; DYLIB="libpdfium.so"    ;;
-  aarch64-unknown-linux-musl)  ASSET="pdfium-linux-arm64";    DYLIB="libpdfium.so"    ;;
+  x86_64-unknown-linux-musl)   ASSET="pdfium-linux-musl-x64";   DYLIB="libpdfium.so"    ;;
+  aarch64-unknown-linux-musl)  ASSET="pdfium-linux-musl-arm64"; DYLIB="libpdfium.so"    ;;
   x86_64-pc-windows-msvc)      ASSET="pdfium-win-x64";        DYLIB="pdfium.dll"      ;;
   aarch64-pc-windows-msvc)     ASSET="pdfium-win-arm64";      DYLIB="pdfium.dll"      ;;
   *) echo "Unsupported target: $TARGET" >&2; exit 1 ;;

@@ -49,6 +49,12 @@ jobs:
             pdfium-dylib: libpdfium.so
             use-container: true
 
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+            node-arch: linux-arm64-musl
+            pdfium-dylib: libpdfium.so
+            use-container: true
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             node-arch: win32-x64-msvc
@@ -115,7 +121,7 @@ jobs:
             -v "$HOME/.cache/pdfium-rs":/root/.cache/pdfium-rs \
             -w /work/packages/node \
             node:20-alpine \
-            /work/scripts/build-musl-node.sh
+            sh -c "TARGET=${{ matrix.target }} /work/scripts/build-musl-node.sh"
 
       - name: Copy pdfium dylib (Unix)
         if: runner.os != 'Windows'
@@ -172,6 +178,9 @@ jobs:
           - os: ubuntu-22.04
             node-arch: linux-x64-musl
             use-container: true
+          - os: ubuntu-22.04-arm
+            node-arch: linux-arm64-musl
+            use-container: true
           - os: windows-latest
             node-arch: win32-x64-msvc
           - os: windows-11-arm
@@ -220,4 +229,4 @@ jobs:
             -v "$GITHUB_WORKSPACE":/work \
             -w /work/packages/node \
             node:20-alpine \
-            /work/scripts/smoke-test-musl-node.sh
+            sh -c "NODE_ARCH=${{ matrix.node-arch }} /work/scripts/smoke-test-musl-node.sh"

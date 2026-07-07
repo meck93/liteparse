@@ -4,6 +4,8 @@
 # `npx tsc` has produced dist/.
 set -eux
 
+NODE_ARCH="${NODE_ARCH:-linux-x64-musl}"
+
 cd /work/packages/node
 
 ls -la *.node *.so 2>/dev/null || true
@@ -14,7 +16,7 @@ ls -la *.node *.so 2>/dev/null || true
 # real cause (missing shared lib, unresolved symbol, etc.).
 node -e '
   const path = require("node:path");
-  const f = path.resolve("./liteparse.linux-x64-musl.node");
+  const f = path.resolve(`./liteparse.${process.env.NODE_ARCH}.node`);
   console.log("loading", f);
   require(f);
   console.log("raw .node loaded ok");

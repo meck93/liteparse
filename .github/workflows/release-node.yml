@@ -69,6 +69,12 @@ jobs:
             pdfium-dylib: libpdfium.so
             use-container: true
 
+          - os: ubuntu-22.04-arm
+            target: aarch64-unknown-linux-musl
+            node-arch: linux-arm64-musl
+            pdfium-dylib: libpdfium.so
+            use-container: true
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             node-arch: win32-x64-msvc
@@ -136,7 +142,7 @@ jobs:
             -v "$HOME/.cache/pdfium-rs":/root/.cache/pdfium-rs \
             -w /work/packages/node \
             node:20-alpine \
-            /work/scripts/build-musl-node.sh
+            sh -c "TARGET=${{ matrix.target }} /work/scripts/build-musl-node.sh"
 
       - name: Copy pdfium dylib (Unix)
         if: runner.os != 'Windows'
@@ -190,6 +196,12 @@ jobs:
             node-arch: darwin-x64
           - os: ubuntu-22.04
             node-arch: linux-x64-gnu
+          - os: ubuntu-22.04
+            node-arch: linux-x64-musl
+            use-container: true
+          - os: ubuntu-22.04-arm
+            node-arch: linux-arm64-musl
+            use-container: true
           - os: windows-latest
             node-arch: win32-x64-msvc
           - os: windows-11-arm
@@ -219,6 +231,7 @@ jobs:
         run: npx tsc
 
       - name: Smoke test
+        if: ${{ !matrix.use-container }}
         working-directory: packages/node
         run: |
           node -e "
@@ -228,6 +241,16 @@ jobs:
               console.log('Native module loaded successfully');
             });
           "
+
+      - name: Smoke test (musl container)
+        if: ${{ matrix.use-container }}
+        run: |
+          chmod +x scripts/smoke-test-musl-node.sh
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/work \
+            -w /work/packages/node \
+            node:20-alpine \
+            sh -c "NODE_ARCH=${{ matrix.node-arch }} /work/scripts/smoke-test-musl-node.sh"
 
   build-cli:
     needs: validate
@@ -346,6 +369,7 @@ jobs:
             ["linux-x64-gnu"]="x86_64-unknown-linux-gnu"
             ["linux-x64-musl"]="x86_64-unknown-linux-musl"
             ["linux-arm64-gnu"]="aarch64-unknown-linux-gnu"
+            ["linux-arm64-musl"]="aarch64-unknown-linux-musl"
             ["win32-x64-msvc"]="x86_64-pc-windows-msvc"
             ["win32-arm64-msvc"]="aarch64-pc-windows-msvc"
           )
@@ -376,6 +400,7 @@ jobs:
               linux-x64-gnu)   OS="linux";  CPU="x64"; LIBC="glibc" ;;
               linux-x64-musl)  OS="linux";  CPU="x64"; LIBC="musl" ;;
               linux-arm64-gnu) OS="linux";  CPU="arm64"; LIBC="glibc" ;;
+              linux-arm64-musl) OS="linux"; CPU="arm64"; LIBC="musl" ;;
             esac
 
             VERSION=${{ inputs.version }}
